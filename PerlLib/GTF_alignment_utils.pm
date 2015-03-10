@@ -1,4 +1,4 @@
-package GFF3_alignment_utils;
+package GTF_alignment_utils;
 
 use strict;
 use warnings;
