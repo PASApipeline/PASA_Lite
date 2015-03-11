@@ -1,3 +1,5 @@
+#!/usr/bin/env perl
+
 package GTF_alignment_utils;
 
 use strict;
@@ -8,11 +10,15 @@ use Gene_obj;
 use CDNA::Alignment_segment;
 use CDNA::CDNA_alignment;
 
-sub index_alignment_objs {
-    my ($gff3_alignment_file, $genome_alignment_indexer_href) = @_;
+__run_test() unless caller;
     
-    unless ($gff3_alignment_file && -s $gff3_alignment_file) {
-        confess "Error, cannot find or open file $gff3_alignment_file";
+
+
+sub index_alignment_objs {
+    my ($gtf_alignment_file, $genome_alignment_indexer_href) = @_;
+    
+    unless ($gtf_alignment_file && -s $gtf_alignment_file) {
+        confess "Error, cannot find or open file $gtf_alignment_file";
     }
     unless (ref $genome_alignment_indexer_href) {
         confess "Error, need genome indexer href as param ";
@@ -22,15 +28,15 @@ sub index_alignment_objs {
     	
 	my %genome_trans_to_alignment_segments;
 	
-	open (my $fh, $gff3_alignment_file) or die "Error, cannot open file $gff3_alignment_file";
+	open (my $fh, $gtf_alignment_file) or die "Error, cannot open file $gtf_alignment_file";
 	while (<$fh>) {
 		chomp;
-		
+		if (/^\#/) { next; }
 		unless (/\w/) { next; }
 		
 		my @x = split(/\t/);
 
-		unless (scalar (@x) >= 8 && $x[8] =~ /ID=/) {
+		unless (scalar (@x) >= 8 && $x[8] =~ /transcript_id/) {
 			print STDERR "ignoring line: $_\n";
 			next;
 		}
@@ -51,7 +57,7 @@ sub index_alignment_objs {
 		foreach my $part (@parts) {
 			$part =~ s/^\s+|\s+$//;
 			$part =~ s/\"//g;
-			my ($att, $val) = split(/=/, $part);
+			my ($att, $val) = split(/\s+/, $part);
 			
 			if (exists $atts{$att}) {
 				die "Error, already defined attribute $att in $_";
@@ -59,35 +65,20 @@ sub index_alignment_objs {
 			
 			$atts{$att} = $val;
 		}
-
-		my $gene_id = $atts{ID} or die "Error, no gene_id at $_";
-		my $trans_id = $atts{Target} or die "Error, no trans_id at $_";
-		{
-			my @pieces = split(/\s+/, $trans_id);
-			$trans_id = shift @pieces;
-		}
-		
-		my ($end5, $end3) = ($orient eq '+') ? ($lend, $rend) : ($rend, $lend);
         
-        $info =~ /Target=\S+ (\d+) (\d+) ([\+\-])/ or die "Error, cannot extract match coordinates from info: $info";
-        my $cdna_seg_lend = $1;
-        my $cdna_seg_rend = $2;
-        my $cdna_orient = $3; # always set to + in pasa
+		my $gene_id = $atts{gene_id} or die "Error, no gene_id at $_";
+		my $trans_id = $atts{transcript_id} or die "Error, no trans_id at $_";
         
-        my $alignment_segment = new CDNA::Alignment_segment($end5, $end3, $cdna_seg_lend, $cdna_seg_rend, $per_id);
-        
-
-        push (@{$genome_trans_to_alignment_segments{$scaff}->{$gene_id}}, $alignment_segment);
-        
-		
-        
-	}
+		        
+        push (@{$genome_trans_to_alignment_segments{$scaff}->{$trans_id}}, [$lend, $rend, $orient]);
+                
+    }
     
-
+    
     my %scaff_to_align_list;
     
     
-	## Output genes in gff3 format:
+	## Output genes in gtf format:
 
 	foreach my $scaff (sort keys %genome_trans_to_alignment_segments) {
         
@@ -95,19 +86,36 @@ sub index_alignment_objs {
 
         foreach my $alignment_acc (@alignment_accs) {
 
-            my $segments_aref = $genome_trans_to_alignment_segments{$scaff}->{$alignment_acc};
-            
-            ## determine cdna length
-            my @cdna_coords;
-            foreach my $segment (@$segments_aref) {
-                push (@cdna_coords, $segment->get_mcoords());
+            my @segments = @{$genome_trans_to_alignment_segments{$scaff}->{$alignment_acc}};
+            @segments = sort {$a->[0]<=>$b->[0]} @segments;
+            my $orient = $segments[0]->[2];
+            if ($orient eq '-') { 
+                @segments = reverse @segments;
             }
-            @cdna_coords = sort {$a<=>$b} @cdna_coords;
-            my $max_coord = pop @cdna_coords;
-
-            my $cdna_alignment_obj = new CDNA::CDNA_alignment($max_coord, $segments_aref);
+            my @cdna_align_segs;
+            my @coords;
+            my $curr_cdna_len = 0;
+            foreach my $segment (@segments) {
+                my ($lend, $rend, $orient) = @$segment;
+                my ($m_lend, $m_rend) = ($curr_cdna_len + 1, $curr_cdna_len + abs($rend - $lend) + 1);
+                $curr_cdna_len = $m_rend;
+                if ($orient eq '-') {
+                    ($m_lend, $m_rend) = ($m_rend, $m_lend);
+                }
+                my $alignment_segment = new CDNA::Alignment_segment($lend, $rend, $m_lend, $m_rend, 100);
+                push (@cdna_align_segs, $alignment_segment);
+                
+            }
+            
+            my $cdna_alignment_obj = new CDNA::CDNA_alignment($curr_cdna_len, \@cdna_align_segs);
             $cdna_alignment_obj->set_acc($alignment_acc);
             $cdna_alignment_obj->{genome_acc} = $scaff;
+
+            my $spliced_orient = $orient;
+            if ($spliced_orient !~ /^[\+\-]$/) {
+                $spliced_orient = '?';
+            }
+            $cdna_alignment_obj->set_spliced_orientation($spliced_orient);
             
             $genome_alignment_indexer_href->{$alignment_acc} = $cdna_alignment_obj;
             
@@ -117,6 +125,44 @@ sub index_alignment_objs {
 
     return(%scaff_to_align_list);
 }
+
+
+###########
+# Testing
+##########
+
+sub __run_test {
+    
+    my $usage = "usage: $0 file.gtf\n\n";
+
+    my $gtf_file = $ARGV[0] or die $usage;
+
+    my $indexer = {};
+    my %scaff_to_alignments = &index_alignment_objs($gtf_file, $indexer);
+    
+    
+    foreach my $scaffold (keys %scaff_to_alignments) {
+
+        my @align_ids = @{$scaff_to_alignments{$scaffold}};
+
+        foreach my $align_id (@align_ids) {
+            my $cdna_obj = $indexer->{$align_id};
+
+            print $cdna_obj->toString();
+        }
+    }
+
+    
+    
+    exit(0);
+    
+
+
+}
+
+
+
+
 
 1; #EOM
 
