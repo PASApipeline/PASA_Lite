@@ -116,6 +116,7 @@ sub index_alignment_objs {
                 $spliced_orient = '?';
             }
             $cdna_alignment_obj->set_spliced_orientation($spliced_orient);
+
             
             $genome_alignment_indexer_href->{$alignment_acc} = $cdna_alignment_obj;
             

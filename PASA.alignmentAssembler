@@ -1,0 +1,340 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+use Carp;
+use Getopt::Long qw(:config posix_default no_ignore_case bundling pass_through);
+
+use FindBin;
+use lib ("$FindBin::Bin/PerlLib");
+use GFF3_alignment_utils;
+use GTF_alignment_utils;
+use Overlap_piler;
+use Fasta_reader;
+use SingleLinkageClusterer;
+use CDNA::PASA_alignment_assembler;
+
+my $help_flag;
+
+
+my $usage = <<__EOUSAGE__;
+
+#####################################################################
+
+ usage: $0  --genome genome.fasta [opts] Trinity_gmap.gff3 [Cufflinks.gtf ...]
+
+
+######################################################################################################
+#
+#  Required:
+#
+#   --genome <string>                    : genome.fasta
+#
+#  Optional:
+#
+#
+#   --transcribed_is_aligned_orient      : flag, indicating strand-specific and transcripts 
+#                                        already oriented accordingly.  (default, not 
+#                                        trusting aligned orientation, define transcribed 
+#                                        orient based on splicing patterns.)
+# 
+#   --require_consensus_splicesites      :flag, any spliced transcript having non-consensus
+#                                        dinucleotide splice sites is treated as invalid.
+#                                        (accepted pairs restricted to: GT-AG, GC-AG, and AT-AC
+#
+#
+#   --discard_unspliced_transcripts      :flag, any unspliced transcript alignment is set to invalid.
+#
+#   --out_prefix <string>                : prefix for output file names (default: 'pasa_lite')
+#
+######################################################################################################
+
+
+
+__EOUSAGE__
+
+    ;
+
+
+my $genome_fasta;
+my $transcribed_is_aligned_orient_flag = 0;
+my $require_consensus_splicesites_flag = 0;
+my $discard_unspliced_transcripts_flag = 0;
+my $out_prefix = "pasa_lite";
+
+&GetOptions ( 'h' => \$help_flag,
+              'genome=s' => \$genome_fasta,
+              'transcribed_is_aligned_orient' => \$transcribed_is_aligned_orient_flag,
+              'require_consensus_splicesites' => \$require_consensus_splicesites_flag,
+              'discard_unspliced_transcripts' => \$discard_unspliced_transcripts_flag,
+              'out_prefix=s' => \$out_prefix,
+    );
+
+
+my @unrecognized_args = grep { ! /\.(gtf|gff3)$/ } @ARGV;
+
+if (@unrecognized_args) {
+    die "Error, don't recognize arguments: [@unrecognized_args] as prog options or gtf, gff3 files... ";
+}
+
+my @gxf_files = @ARGV;
+
+
+if ($help_flag) {
+    die $usage;
+}
+
+unless ($genome_fasta && @gxf_files) {
+    die $usage;
+}
+
+
+main: {
+
+    my %cdna_alignments;
+    my %scaff_to_cdna_list;
+    
+    foreach my $gxf_file (@gxf_files) {
+        &add_cdna_alignments($gxf_file, \%cdna_alignments, \%scaff_to_cdna_list);
+    }
+
+    ## Perform validations, assign spliced orientation
+    my $fasta_reader = new Fasta_reader($genome_fasta);
+    my %genome_seqs = $fasta_reader->retrieve_all_seqs_hash();
+    
+    my %scaff_to_cdna_piles;
+
+    ## prep outfiles
+    open (my $ofh_invalid_alignments, ">$out_prefix.invalid_alignments.gtf");
+    open (my $ofh_valid_alignments, ">$out_prefix.valid_alignments.gtf");
+    open (my $ofh_assembled_alignments, ">$out_prefix.pasa_assembled_alignments.gtf");
+
+    my %all_FHs = (invalid => $ofh_invalid_alignments,
+                   valid => $ofh_valid_alignments,
+                   assembled => $ofh_assembled_alignments);
+    
+
+    foreach my $scaff (keys %scaff_to_cdna_list) {
+        
+        my $cdna_ids_aref = $scaff_to_cdna_list{$scaff};
+        
+        my $genome_seq = $genome_seqs{$scaff};
+        
+        &validate_transcript_alignments($cdna_ids_aref, \$genome_seq, \%cdna_alignments); # also redefine spliced orientation
+        
+        my @clustered_isoforms = &cluster_transcripts($cdna_ids_aref, \%cdna_alignments);
+        
+        &assemble_clusters($scaff, \@clustered_isoforms, \%cdna_alignments, $cdna_ids_aref, \%all_FHs);
+        
+    }
+    
+    # close ofhs
+    foreach my $ofh (values %all_FHs) {
+        close $ofh;
+    }
+    
+    exit(0);
+    
+    
+}
+
+
+####
+sub assemble_clusters {
+    my ($scaff, $clustered_isoforms_aref, $cdna_alignments_href, $cdna_ids_aref, $all_FHs_href) = @_;
+    
+    my $invalid_fh = $all_FHs_href->{invalid};
+    my $valid_fh = $all_FHs_href->{valid};
+    my $assembled_fh = $all_FHs_href->{assembled};
+
+    my @all_assemblies;
+
+    my %seen;
+    
+    my $gene_counter = 0;
+
+    foreach my $cluster (@$clustered_isoforms_aref) {
+        my @trans_ids = @$cluster;
+        
+        my @cdna_alignments_to_assemble;
+        foreach my $trans_id (@trans_ids) {
+            my $cdna_alignment_obj = $cdna_alignments_href->{$trans_id};
+            
+            $gene_counter++;
+            
+            if (my $errors_text = $cdna_alignment_obj->get_error_flag()) {
+                # report in invalid set
+                print $invalid_fh "# $trans_id " . $cdna_alignment_obj->toToken() . " ERROR: $errors_text\n"
+                    . $cdna_alignment_obj->to_GTF_format(gene_id => "$scaff.g$gene_counter") . "\n";
+            }
+            else {
+                
+                print $valid_fh "# $trans_id " . $cdna_alignment_obj->toToken() . "\n"
+                    . $cdna_alignment_obj->to_GTF_format(gene_id => "$scaff.g$gene_counter") . "\n";
+
+                
+                push (@cdna_alignments_to_assemble, $cdna_alignment_obj);
+            }
+                        
+            $seen{$trans_id} = 1;
+        }
+        
+        if (scalar @cdna_alignments_to_assemble > 1) {
+            my $assembler = new CDNA::PASA_alignment_assembler();
+            
+            $assembler->assemble_alignments(@cdna_alignments_to_assemble);
+            
+            print $assembler->toAlignIllustration(80);
+            print "\n\n\n";
+            
+            my @assemblies = $assembler->get_assemblies();
+            push (@all_assemblies, @assemblies);
+            foreach my $assembly (@assemblies) {
+                my $acc = $assembly->get_acc();
+                $assembly->{genome_acc} = $scaff;
+                
+                print "ASSEMBLY: " . $assembly->toToken() . "\t$acc\n";
+                
+                print $assembled_fh "# $acc " . $assembly->toToken() . "\n"
+                    . $assembly->to_GTF_format(gene_id => "$scaff.g$gene_counter") . "\n";
+            }
+        }
+        elsif (@cdna_alignments_to_assemble == 1) {
+            ## just report the transcript itself, no assembly required
+            
+            my $cdna_alignment_obj = shift @cdna_alignments_to_assemble;
+            
+            my $acc = $cdna_alignment_obj->get_acc();
+            
+            print $assembled_fh "# $acc " . $cdna_alignment_obj->toToken() . "\n"
+                . $cdna_alignment_obj->to_GTF_format(gene_id => "$scaff.g$gene_counter") . "\n";
+                        
+        }
+                
+    }
+    
+    
+    ## Report those singletons that do not require assembly
+  singletons: {
+      
+      foreach my $cdna_acc (@$cdna_ids_aref) {
+          
+          unless ($seen{$cdna_acc}) {
+            
+              $gene_counter++;
+  
+              my $cdna_alignment_obj = $cdna_alignments_href->{$cdna_acc};
+              
+              if (my $errors_text = $cdna_alignment_obj->get_error_flag()) {
+                  print $invalid_fh "# $cdna_acc " . $cdna_alignment_obj->toToken() . " ERROR: $errors_text\n"
+                      . $cdna_alignment_obj->to_GTF_format(gene_id => "$scaff.g$gene_counter") . "\n"; 
+              }
+                else {
+                    print $assembled_fh "# $cdna_acc " . $cdna_alignment_obj->toToken() . "\n"
+                        . $cdna_alignment_obj->to_GTF_format(gene_id => "$scaff.g$gene_counter") . "\n";
+                    
+                    print $valid_fh "# $cdna_acc " . $cdna_alignment_obj->toToken() . "\n"
+                        . $cdna_alignment_obj->to_GTF_format(gene_id => "$scaff.g$gene_counter") . "\n";
+                }
+          }
+          
+          
+          
+      }
+      
+    }
+    
+    return;
+}
+
+
+
+####
+sub validate_transcript_alignments {
+    my ($cdna_ids_aref, $genome_seq_sref, $cdna_alignments_href) = @_;
+    
+    foreach my $cdna_acc (@$cdna_ids_aref) {
+
+        my $cdna_alignment_obj = $cdna_alignments_href->{$cdna_acc};
+        
+        if ($transcribed_is_aligned_orient_flag) {
+            $cdna_alignment_obj->set_spliced_orientation( $cdna_alignment_obj->get_aligned_orientation() );
+        }
+        
+        
+        if ($cdna_alignment_obj->get_num_segments() > 1) {
+            $cdna_alignment_obj->identify_splice_junctions($genome_seq_sref);
+        }
+        else {
+            # single-exon alignment
+            if ($discard_unspliced_transcripts_flag) {
+                $cdna_alignment_obj->{error_flag} = "single-segment alignment invalid due to --discard_unspliced_transcripts param set";
+            }
+        }
+    }
+    
+    return;
+
+}
+
+
+
+####
+sub add_cdna_alignments {
+    my ($gxf_file, $cdna_alignments_href, $scaff_to_cdna_list_href) = @_;
+    
+    my %local_scaff_to_gene_list;
+
+    if ($gxf_file =~ /\.gtf$/i) {
+        %local_scaff_to_gene_list = &GTF_alignment_utils::index_alignment_objs($gxf_file, $cdna_alignments_href);
+    }
+    elsif ($gxf_file =~ /\.gff3$/i) {
+        %local_scaff_to_gene_list = &GFF3_alignment_utils::index_alignment_objs($gxf_file, $cdna_alignments_href);
+    }
+
+    ## tack them on to our master list
+    foreach my $scaff (keys %local_scaff_to_gene_list) {
+        my @ids = @{$local_scaff_to_gene_list{$scaff}};
+        
+        push (@{$scaff_to_cdna_list_href->{$scaff}}, @ids);
+    }
+    
+    return;
+}
+        
+
+####
+sub cluster_transcripts {
+    my ($cdna_ids_aref, $cdna_alignments_href) = @_;
+
+    my $overlap_piler = new Overlap_piler();
+    
+    foreach my $cdna_acc (@$cdna_ids_aref) {
+        
+        my $alignment_obj = $cdna_alignments_href->{$cdna_acc};
+        
+        my @segments = $alignment_obj->get_alignment_segments();
+        foreach my $segment (@segments) {
+            my ($lend, $rend) = $segment->get_coords();
+            $overlap_piler->add_coordSet($cdna_acc, $lend, $rend);
+        }
+    }
+
+    my @clustered_accs = $overlap_piler->build_clusters();
+
+    
+    my @pairs;
+    
+    foreach my $cluster (@clustered_accs) {
+        for (my $i = 1; $i <= $#$cluster; $i++) {
+            my $prev = $cluster->[$i-1];
+            my $curr = $cluster->[$i];
+            
+            push (@pairs, [$prev, $curr]);
+        }
+    }
+
+    my @sl_clusters = &SingleLinkageClusterer::build_clusters(@pairs);
+    
+    return(@sl_clusters);
+}
