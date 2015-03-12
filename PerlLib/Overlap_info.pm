@@ -13,6 +13,10 @@ use Data::Dumper;
 sub overlap {
 	my ($coordsA_aref, $coordsB_aref) = @_;
 
+    unless (ref $coordsA_aref eq "ARRAY" && ref $coordsB_aref eq "ARRAY") {
+        confess "Error, need pair of array refs as input params";
+    }
+    
 	my ($lendA, $rendA) = sort {$a<=>$b} @$coordsA_aref;
 	
 	my ($lendB, $rendB) = sort {$a<=>$b} @$coordsB_aref;

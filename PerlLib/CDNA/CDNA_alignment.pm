@@ -1937,6 +1937,23 @@ sub max_coord {
 }
 
 
+####
+sub get_sum_alignment_segments_length {
+    my $self = shift;
+    my @segments = $self->get_alignment_segments();
+
+    my $sum_len = 0;
+    foreach my $segment (@segments) {
+        my ($lend, $rend) = $segment->get_coords();
+        my $len = abs($rend - $lend) + 1;
+
+        $sum_len += $len;
+    }
+    
+    return($sum_len);
+}
+
+
 1; #EOM
 
 

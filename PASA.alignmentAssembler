@@ -13,6 +13,9 @@ use Overlap_piler;
 use Fasta_reader;
 use SingleLinkageClusterer;
 use CDNA::PASA_alignment_assembler;
+use CDNA::Genome_based_cDNA_assembler;
+use Overlap_info;
+use List::Util qw(min max);
 
 my $help_flag;
 
@@ -47,6 +50,11 @@ my $usage = <<__EOUSAGE__;
 #
 #   --out_prefix <string>                : prefix for output file names (default: 'pasa_lite')
 #
+#   --min_pct_iso_shared_sequence <int>  : minimum percent of shared exon shared between two isoforms
+#                                          to be joined into the same gene cluster.
+#                                          min_pct = ( shared_seq_len / shorter_isoform_len) * 100
+#                                         (default: 20)
+#
 ######################################################################################################
 
 
@@ -61,6 +69,7 @@ my $transcribed_is_aligned_orient_flag = 0;
 my $require_consensus_splicesites_flag = 0;
 my $discard_unspliced_transcripts_flag = 0;
 my $out_prefix = "pasa_lite";
+my $MIN_PCT_OVERLAP = 20;
 
 &GetOptions ( 'h' => \$help_flag,
               'genome=s' => \$genome_fasta,
@@ -68,6 +77,7 @@ my $out_prefix = "pasa_lite";
               'require_consensus_splicesites' => \$require_consensus_splicesites_flag,
               'discard_unspliced_transcripts' => \$discard_unspliced_transcripts_flag,
               'out_prefix=s' => \$out_prefix,
+              'min_pct_iso_shared_sequence=i' => \$MIN_PCT_OVERLAP,
     );
 
 
@@ -184,19 +194,37 @@ sub assemble_clusters {
             
             $assembler->assemble_alignments(@cdna_alignments_to_assemble);
             
-            print $assembler->toAlignIllustration(80);
-            print "\n\n\n";
+            #print $assembler->toAlignIllustration(80);
+            #print "\n\n\n";
             
             my @assemblies = $assembler->get_assemblies();
-            push (@all_assemblies, @assemblies);
-            foreach my $assembly (@assemblies) {
-                my $acc = $assembly->get_acc();
-                $assembly->{genome_acc} = $scaff;
+            
+            my @clustered_assemblies = &cluster_assemblies_via_exon_overlap(@assemblies);
+
+            foreach my $assembly_set (@clustered_assemblies) {
                 
-                print "ASSEMBLY: " . $assembly->toToken() . "\t$acc\n";
+                $gene_counter++; # ensure each assembly set shares the same gene ID
                 
-                print $assembled_fh "# $acc " . $assembly->toToken() . "\n"
-                    . $assembly->to_GTF_format(gene_id => "$scaff.g$gene_counter") . "\n";
+                if (scalar @$assembly_set > 1) {
+                    print STDERR "******  Got Alt splicing involving: " . scalar(@$assembly_set) . " transcripts\n";
+                
+                    my $assembler = new CDNA::Genome_based_cDNA_assembler;
+                    $assembler->{incoming_alignments} = [@$assembly_set];
+                    $assembler->{assemblies} = [@$assembly_set];
+                    print STDERR $assembler->toAlignIllustration();
+                    
+
+                }
+                
+                foreach my $assembly (@$assembly_set) {
+                    my $acc = $assembly->get_acc();
+                    $assembly->{genome_acc} = $scaff;
+                    
+                    print "ASSEMBLY: " . $assembly->toToken() . "\t$acc\n";
+                    
+                    print $assembled_fh "# $acc " . $assembly->toToken() . "\n"
+                        . $assembly->to_GTF_format(gene_id => "$scaff.g$gene_counter") . "\n";
+                }
             }
         }
         elsif (@cdna_alignments_to_assemble == 1) {
@@ -338,3 +366,111 @@ sub cluster_transcripts {
     
     return(@sl_clusters);
 }
+
+
+####
+sub cluster_assemblies_via_exon_overlap {
+    my (@assemblies) = @_;
+
+    if (scalar @assemblies == 1) {
+        # return a cluster of size 1.
+        my @clusters = ([@assemblies]);
+        return(@clusters);
+    }
+    
+    ## multiple assemblies to test as isoforms:
+    
+    my @pairs;
+    
+    ## identify subclusters of relevant assemblies:
+    for (my $i = 0; $i < $#assemblies; $i++) {
+        
+        my $i_align = $assemblies[$i];
+        
+        my $i_spliced_orientation = $i_align->get_spliced_orientation();
+        
+        for (my $j = $i+1; $j <= $#assemblies; $j++) {
+            my $j_align = $assemblies[$j];
+    
+            my $j_spliced_orientation = $j_align->get_spliced_orientation();
+            
+            ## check for compatible spliced orientations.
+            unless ($i_spliced_orientation eq $j_spliced_orientation) {
+                next; #must have same spliced orientation
+            }
+            
+            my ($i_lend, $i_rend) = sort {$a<=>$b} $i_align->get_coords();
+            my ($j_lend, $j_rend) = sort {$a<=>$b} $j_align->get_coords();
+            
+            unless (&Overlap_info::overlap([$i_lend,$i_rend], [$j_lend,$j_rend])) {
+                next;
+            }
+
+            
+            my $i_length = $i_align->get_sum_alignment_segments_length();
+            my $j_length = $j_align->get_sum_alignment_segments_length();
+            
+            my $sum_exon_overlap = &Overlap_info::sum_overlaps( [ &get_exon_coord_tupples($i_align) ],
+                                                                [ &get_exon_coord_tupples($j_align) ] );
+            
+            my $shorter_iso_len = min($i_length, $j_length);
+
+            my $pct_overlap = $sum_exon_overlap / $shorter_iso_len * 100;
+
+            unless ($pct_overlap >= $MIN_PCT_OVERLAP) {
+                next;
+            }
+                        
+            ## passed test
+            push (@pairs, [$i, $j]);
+        }
+    }
+            
+    ## Get sets of overlapping clusters
+    my @clusters = &SingleLinkageClusterer::build_clusters(@pairs);
+    
+    
+  group_isoforms: {
+      my %seen;
+      my @assembly_clusters; #contains refs to lists of alignment objs.
+      foreach my $cluster (@clusters) {
+          my @indices = @$cluster;
+          
+          my @assembly_cluster;
+          foreach my $index (@indices) {
+              my $align_obj = $assemblies[$index];
+              $seen{$index} = 1;
+              push (@assembly_cluster, $align_obj);
+          }
+          push (@assembly_clusters, [@assembly_cluster]);
+      }
+
+      for (my $i = 0; $i <= $#assemblies; $i++) {
+          unless ($seen{$i}) {
+              # add as a singleton
+              push (@assembly_clusters, [ $assemblies[$i] ]);
+          }
+      }
+
+      return(@assembly_clusters);
+    }
+    
+}
+
+
+####
+sub get_exon_coord_tupples {
+    my ($align_obj) = @_;
+
+    my @alignment_segments = $align_obj->get_alignment_segments($align_obj);
+
+    my @coord_tupples;
+    foreach my $align_seg (@alignment_segments) {
+        my ($lend, $rend) = sort {$a<=>$b} $align_seg->get_coords();
+
+        push (@coord_tupples, [$lend, $rend]);
+    }
+
+    return(@coord_tupples);
+}
+
