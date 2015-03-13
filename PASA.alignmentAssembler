@@ -238,14 +238,18 @@ sub assemble_clusters {
                 lock $invalid_lock;
                 
                 print $invalid_fh "# $trans_id " . $cdna_alignment_obj->toToken() . " ERROR: $errors_text\n"
-                    . $cdna_alignment_obj->to_GTF_format(gene_id => "$scaff.g$gene_counter") . "\n";
+                    . $cdna_alignment_obj->to_GTF_format(gene_id => "$scaff.g$gene_counter",
+                                                         source => $cdna_alignment_obj->{source},
+                    ) . "\n";
             }
             else {
                 
                 lock $valid_lock;
 
                 print $valid_fh "# $trans_id " . $cdna_alignment_obj->toToken() . "\n"
-                    . $cdna_alignment_obj->to_GTF_format(gene_id => "$scaff.g$gene_counter") . "\n";
+                    . $cdna_alignment_obj->to_GTF_format(gene_id => "$scaff.g$gene_counter",
+                                                         source => $cdna_alignment_obj->{source},
+                    ) . "\n";
 
                 
                 push (@cdna_alignments_to_assemble, $cdna_alignment_obj);
@@ -281,16 +285,27 @@ sub assemble_clusters {
 
                 }
                 
+                my $iso_counter = 0;
+                
                 foreach my $assembly (@$assembly_set) {
+                    
+                    $iso_counter++;
+                    
                     my $acc = $assembly->get_acc();
                     $assembly->{genome_acc} = $scaff;
                     
                     print "ASSEMBLY: " . $assembly->toToken() . "\t$acc\n";
                     
                     lock $assembled_lock;
+            
                     
-                    print $assembled_fh "# $acc " . $assembly->toToken() . "\n"
-                        . $assembly->to_GTF_format(gene_id => "$scaff.g$gene_counter") . "\n";
+                    my $trans_id = "$scaff.g$gene_counter.i$iso_counter";
+        
+                    print $assembled_fh "# $trans_id => $acc " . $assembly->toToken() . "\n"
+                        . $assembly->to_GTF_format(gene_id => "$scaff.g$gene_counter",
+                                                   transcript_id => $trans_id,
+                        ) 
+                        . "\n";
                 }
             }
         }
@@ -327,7 +342,9 @@ sub assemble_clusters {
                   lock $invalid_lock;
                   
                   print $invalid_fh "# $cdna_acc " . $cdna_alignment_obj->toToken() . " ERROR: $errors_text\n"
-                      . $cdna_alignment_obj->to_GTF_format(gene_id => "$scaff.g$gene_counter") . "\n"; 
+                      . $cdna_alignment_obj->to_GTF_format(gene_id => "$scaff.g$gene_counter",
+                                                           source => $cdna_alignment_obj->{source},
+                      ) . "\n"; 
               }
               else {
                   
@@ -342,7 +359,9 @@ sub assemble_clusters {
                       lock $valid_lock;
                       
                       print $valid_fh "# $cdna_acc " . $cdna_alignment_obj->toToken() . "\n"
-                          . $cdna_alignment_obj->to_GTF_format(gene_id => "$scaff.g$gene_counter") . "\n";
+                          . $cdna_alignment_obj->to_GTF_format(gene_id => "$scaff.g$gene_counter",
+                                                               source => $cdna_alignment_obj->source(),
+                          ) . "\n";
                   }
               }
           }

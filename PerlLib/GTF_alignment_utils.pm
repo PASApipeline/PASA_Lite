@@ -9,6 +9,7 @@ use Carp;
 use Gene_obj;
 use CDNA::Alignment_segment;
 use CDNA::CDNA_alignment;
+use File::Basename;
 
 __run_test() unless caller;
     
@@ -117,6 +118,7 @@ sub index_alignment_objs {
             }
             $cdna_alignment_obj->set_spliced_orientation($spliced_orient);
 
+            $cdna_alignment_obj->{source} = basename($gtf_alignment_file);
             
             $genome_alignment_indexer_href->{$alignment_acc} = $cdna_alignment_obj;
             
