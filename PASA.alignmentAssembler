@@ -41,11 +41,6 @@ my $usage = <<__EOUSAGE__;
 #                                        trusting aligned orientation, define transcribed 
 #                                        orient based on splicing patterns.)
 # 
-#   --require_consensus_splicesites      :flag, any spliced transcript having non-consensus
-#                                        dinucleotide splice sites is treated as invalid.
-#                                        (accepted pairs restricted to: GT-AG, GC-AG, and AT-AC
-#
-#
 #   --discard_unspliced_transcripts      :flag, any unspliced transcript alignment is set to invalid.
 #
 #   --out_prefix <string>                : prefix for output file names (default: 'pasa_lite')
@@ -53,7 +48,11 @@ my $usage = <<__EOUSAGE__;
 #   --min_pct_iso_shared_sequence <int>  : minimum percent of shared exon shared between two isoforms
 #                                          to be joined into the same gene cluster.
 #                                          min_pct = ( shared_seq_len / shorter_isoform_len) * 100
-#                                         (default: 20)
+#                                          (default: 20)
+#
+#  Note: As is the PASA tradition, spliced transcripts having non-consensus dinucleotide splice sites
+#        are  treated as invalid.   (accepted pairs restricted to: GT-AG, GC-AG, and AT-AC)
+#
 #
 ######################################################################################################
 
