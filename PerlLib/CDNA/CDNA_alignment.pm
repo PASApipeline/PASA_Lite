@@ -638,6 +638,16 @@ sub determine_alignment_attributes {
 }
 
 
+
+####
+sub get_avg_per_id {
+    my $self = shift;
+    return($self->{avg_per_id});
+}
+
+
+
+
 =over 4
     
 =item get_alignment_segments()

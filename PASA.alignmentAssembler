@@ -58,6 +58,8 @@ my $usage = <<__EOUSAGE__;
 #                                          min_pct = ( shared_seq_len / shorter_isoform_len) * 100
 #                                          (default: 20)
 #
+#   --min_per_id <float>                 : min average percent identity of an alignment (default: 95)
+#
 #  Note: As is the PASA tradition, spliced transcripts having non-consensus dinucleotide splice sites
 #        are  treated as invalid.   (accepted pairs restricted to: GT-AG, GC-AG, and AT-AC)
 #
@@ -78,6 +80,7 @@ my $discard_unspliced_transcripts_flag = 0;
 my $out_prefix = "pasa_lite";
 my $MIN_PCT_OVERLAP = 20;
 my $CPU = 2;
+my $min_per_id = 95;
 
 &GetOptions ( 'h' => \$help_flag,
               'genome=s' => \$genome_fasta,
@@ -87,6 +90,7 @@ my $CPU = 2;
               'out_prefix=s' => \$out_prefix,
               'min_pct_iso_shared_sequence=i' => \$MIN_PCT_OVERLAP,
               'CPU=i' => \$CPU,
+              'min_per_id=f' => \$min_per_id,
     );
 
 
@@ -396,9 +400,18 @@ sub validate_transcript_alignments {
         else {
             # single-exon alignment
             if ($discard_unspliced_transcripts_flag) {
-                $cdna_alignment_obj->{error_flag} = "single-segment alignment invalid due to --discard_unspliced_transcripts param set";
+                $cdna_alignment_obj->set_error_flag("single-segment alignment invalid due to --discard_unspliced_transcripts param set");
             }
         }
+
+        # check percent identity
+        
+        my $per_id = $cdna_alignment_obj->get_avg_per_id();
+        if (defined($per_id) && $per_id < $min_per_id) {
+            $cdna_alignment_obj->set_error_flag("avg per_id $per_id < min required ($min_per_id)");
+        }
+        
+
     }
     
     return;
