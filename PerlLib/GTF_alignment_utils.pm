@@ -48,6 +48,10 @@ sub index_alignment_objs {
 		my $lend = $x[3];
 		my $rend = $x[4];
         my $per_id = $x[5];
+        
+        unless ($type eq 'exon') { next; }
+        
+
         if ($per_id eq ".") { $per_id = 100; } # making an assumption here.
         
 		my $orient = $x[6];
