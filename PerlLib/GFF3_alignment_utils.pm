@@ -7,6 +7,7 @@ use warnings;
 use Carp;
 
 use Gene_obj;
+use Gene_obj_indexer;
 use CDNA::Alignment_segment;
 use CDNA::CDNA_alignment;
 use File::Basename;
@@ -23,7 +24,7 @@ sub index_alignment_objs {
         confess "Error, need genome indexer href as param ";
     }
     
-    	
+       	
 	my %genome_trans_to_alignment_segments;
 	
 	open (my $fh, $gff3_alignment_file) or die "Error, cannot open file $gff3_alignment_file";
@@ -117,8 +118,14 @@ sub index_alignment_objs {
 
             $cdna_alignment_obj->{source} = basename($gff3_alignment_file);
             
-            $genome_alignment_indexer_href->{$alignment_acc} = $cdna_alignment_obj;
-            
+            if (ref $genome_alignment_indexer_href eq "Gene_obj_indexer") {
+                $genome_alignment_indexer_href->store_gene($alignment_acc, $cdna_alignment_obj);
+                
+            }
+            else {
+                                
+                $genome_alignment_indexer_href->{$alignment_acc} = $cdna_alignment_obj;
+            }
             push (@{$scaff_to_align_list{$scaff}}, $alignment_acc);
         }
     }

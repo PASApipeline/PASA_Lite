@@ -10,10 +10,12 @@ use Getopt::Long qw(:config posix_default no_ignore_case bundling pass_through);
 
 use FindBin;
 use lib ("$FindBin::Bin/PerlLib");
+
 use GFF3_alignment_utils;
 use GTF_alignment_utils;
 use Fasta_retriever;
 use List::Util qw(min max);
+use Gene_obj_indexer;
 
 use Thread_helper;
 
@@ -106,19 +108,24 @@ my $valid_lock : shared;
 main: {
 
 
+    my $tmp_db = "tmp.$$.inx";
+
+
+    my %scaff_to_cdna_list;
+
+    index_alignments: {
+        my $cdna_alignments_indexer = new Gene_obj_indexer( { create => $tmp_db } );
+
+        foreach my $gxf_file (@gxf_files) {
+            print STDERR "-parsing $gxf_file\n";
+            &add_cdna_alignments($gxf_file, $cdna_alignments_indexer, \%scaff_to_cdna_list);
+        }
+    }
+    
+    ## Perform validations, assign spliced orientation
     print STDERR "-reading genome: $genome_fasta\n";
     my $fasta_retriever = new Fasta_retriever($genome_fasta);
-        
-    my %cdna_alignments;
-    my %scaff_to_cdna_list;
-    
-    foreach my $gxf_file (@gxf_files) {
-        print STDERR "-parsing $gxf_file\n";
-        &add_cdna_alignments($gxf_file, \%cdna_alignments, \%scaff_to_cdna_list);
-    }
-
-    ## Perform validations, assign spliced orientation
-        
+            
     ## prep outfiles, flush all filehandles after writes, no buffering since could cause problems w/ threads
     open (my $ofh_invalid_alignments, ">$out_prefix.invalid_alignments.gtf") or die $!;
     my $stdout = select $ofh_invalid_alignments;
@@ -145,7 +152,7 @@ main: {
         
         $thread_helper->wait_for_open_thread();
 
-        my $thread = threads->create('validate_transcript_alignments', $scaff, $cdna_ids_aref, \$genome_seq, \%cdna_alignments, \%all_FHs);
+        my $thread = threads->create('validate_transcript_alignments', $scaff, $cdna_ids_aref, \$genome_seq, $tmp_db, \%all_FHs);
         $thread_helper->add_thread($thread);
     }
     
@@ -180,9 +187,11 @@ main: {
 
 ####
 sub validate_transcript_alignments {
-    my ($scaff, $cdna_ids_aref, $genome_seq_sref, $cdna_alignments_href, $all_FHs_href) = @_;
+    my ($scaff, $cdna_ids_aref, $genome_seq_sref, $tmp_db, $all_FHs_href) = @_;
     
     print STDERR "-validating transcript alignments on scaffold: $scaff\n";
+    
+    my $cdna_alignments_indexer = new Gene_obj_indexer( { 'use' => $tmp_db } );
     
     my $invalid_fh = $all_FHs_href->{invalid};
     my $valid_fh = $all_FHs_href->{valid};
@@ -190,7 +199,7 @@ sub validate_transcript_alignments {
 
     foreach my $cdna_acc (@$cdna_ids_aref) {
 
-        my $cdna_alignment_obj = $cdna_alignments_href->{$cdna_acc};
+        my $cdna_alignment_obj = $cdna_alignments_indexer->get_gene($cdna_acc);
         
         if ($transcribed_is_aligned_orient_flag) {
             $cdna_alignment_obj->set_spliced_orientation( $cdna_alignment_obj->get_aligned_orientation() );
@@ -205,7 +214,7 @@ sub validate_transcript_alignments {
             
             ## ensure proper transcribed orientation in the outputted gtf file
             #  flip it if the splice sites indicate the sequence is reverse-complemented wrt strand 
-            if ($cdna_alignment_obj->get_spliced_orient() =~ /[\+\-]/ 
+            if ($cdna_alignment_obj->get_spliced_orientation() =~ /[\+\-]/ 
                 &&
                 $cdna_alignment_obj->get_spliced_orientation() ne $cdna_alignment_obj->get_aligned_orientation()) {
                 

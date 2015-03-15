@@ -7,6 +7,7 @@ use warnings;
 use Carp;
 
 use Gene_obj;
+use Gene_obj_indexer;
 use CDNA::Alignment_segment;
 use CDNA::CDNA_alignment;
 use File::Basename;
@@ -120,7 +121,12 @@ sub index_alignment_objs {
 
             $cdna_alignment_obj->{source} = basename($gtf_alignment_file);
             
-            $genome_alignment_indexer_href->{$alignment_acc} = $cdna_alignment_obj;
+            if (ref $genome_alignment_indexer_href eq "Gene_obj_indexer") {
+                $genome_alignment_indexer_href->store_gene($alignment_acc, $cdna_alignment_obj);
+            }
+            else {
+                $genome_alignment_indexer_href->{$alignment_acc} = $cdna_alignment_obj;
+            }
             
             push (@{$scaff_to_align_list{$scaff}}, $alignment_acc);
         }
