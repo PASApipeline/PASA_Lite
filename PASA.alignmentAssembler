@@ -13,7 +13,7 @@ use lib ("$FindBin::Bin/PerlLib");
 use GFF3_alignment_utils;
 use GTF_alignment_utils;
 use Overlap_piler;
-use Fasta_reader;
+use Fasta_retriever;
 use SingleLinkageClusterer;
 use CDNA::PASA_alignment_assembler;
 use CDNA::Genome_based_cDNA_assembler;
@@ -121,18 +121,20 @@ my $assembled_lock : shared;
 
 main: {
 
+
+    print STDERR "-reading genome: $genome_fasta\n";
+    my $fasta_retriever = new Fasta_retriever($genome_fasta);
+        
     my %cdna_alignments;
     my %scaff_to_cdna_list;
     
     foreach my $gxf_file (@gxf_files) {
+        print STDERR "-parsing $gxf_file\n";
         &add_cdna_alignments($gxf_file, \%cdna_alignments, \%scaff_to_cdna_list);
     }
 
     ## Perform validations, assign spliced orientation
-    my $fasta_reader = new Fasta_reader($genome_fasta);
-    my %genome_seqs = $fasta_reader->retrieve_all_seqs_hash();
-    
-
+        
     ## prep outfiles, flush all filehandles after writes, no buffering since could cause problems w/ threads
     open (my $ofh_invalid_alignments, ">$out_prefix.invalid_alignments.gtf") or die $!;
     my $stdout = select $ofh_invalid_alignments;
@@ -154,14 +156,13 @@ main: {
         
         );
     
-
     my $thread_helper = new Thread_helper($CPU);
 
     foreach my $scaff (keys %scaff_to_cdna_list) {
         
         my $cdna_ids_aref = $scaff_to_cdna_list{$scaff};
         
-        my $genome_seq = $genome_seqs{$scaff};
+        my $genome_seq = $fasta_retriever->get_seq($scaff);
         
         $thread_helper->wait_for_open_thread();
 
