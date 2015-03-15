@@ -12,12 +12,7 @@ use FindBin;
 use lib ("$FindBin::Bin/PerlLib");
 use GFF3_alignment_utils;
 use GTF_alignment_utils;
-use Overlap_piler;
 use Fasta_retriever;
-use SingleLinkageClusterer;
-use CDNA::PASA_alignment_assembler;
-use CDNA::Genome_based_cDNA_assembler;
-use Overlap_info;
 use List::Util qw(min max);
 
 use Thread_helper;
@@ -43,6 +38,12 @@ my $usage = <<__EOUSAGE__;
 #
 #   --CPU <int>                          : max number of concurrent threads (default: 2)
 ## 
+#   --transcribed_is_aligned_orient      : flag, indicating strand-specific and transcripts 
+#                                        already oriented accordingly.  (default, not 
+#                                        trusting aligned orientation, define transcribed 
+#                                        orient based on splicing patterns.)
+# 
+#
 #   --discard_unspliced_transcripts      :flag, any unspliced transcript alignment is set to invalid.
 #
 #   --out_prefix <string>                : prefix for output file names (default: 'pasa_lite')
@@ -74,6 +75,7 @@ my $min_per_id = 95;
               'genome=s' => \$genome_fasta,
               'require_consensus_splicesites' => \$require_consensus_splicesites_flag,
               'discard_unspliced_transcripts' => \$discard_unspliced_transcripts_flag,
+              'transcribed_is_aligned_orient' => \$transcribed_is_aligned_orient_flag,
               'out_prefix=s' => \$out_prefix,
               'CPU=i' => \$CPU,
               'min_per_id=f' => \$min_per_id,
@@ -180,6 +182,8 @@ main: {
 sub validate_transcript_alignments {
     my ($scaff, $cdna_ids_aref, $genome_seq_sref, $cdna_alignments_href, $all_FHs_href) = @_;
     
+    print STDERR "-validating transcript alignments on scaffold: $scaff\n";
+    
     my $invalid_fh = $all_FHs_href->{invalid};
     my $valid_fh = $all_FHs_href->{valid};
     
@@ -194,7 +198,20 @@ sub validate_transcript_alignments {
         
         
         if ($cdna_alignment_obj->get_num_segments() > 1) {
+            
+            ## Multi-exon transcripts
+
             $cdna_alignment_obj->identify_splice_junctions($genome_seq_sref);
+            
+            ## ensure proper transcribed orientation in the outputted gtf file
+            #  flip it if the splice sites indicate the sequence is reverse-complemented wrt strand 
+            if ($cdna_alignment_obj->get_spliced_orient() =~ /[\+\-]/ 
+                &&
+                $cdna_alignment_obj->get_spliced_orientation() ne $cdna_alignment_obj->get_aligned_orientation()) {
+                
+                $cdna_alignment_obj->remap_cdna_segment_coords();
+            }
+
         }
         else {
             # single-exon alignment
@@ -221,14 +238,14 @@ sub validate_transcript_alignments {
             lock $invalid_lock;
             
             print $invalid_fh "# $cdna_acc " . $cdna_alignment_obj->toToken() . " ERROR: $errors_text\n"
-                . $cdna_alignment_obj->to_GTF_format(source => $cdna_alignment_obj->{source}) . "\n";
+                . $cdna_alignment_obj->to_GTF_format(gene_id => $cdna_acc, source => $cdna_alignment_obj->{source}) . "\n";
         }
         else {
             
             lock $valid_lock;
             
             print $valid_fh "# $cdna_acc " . $cdna_alignment_obj->toToken() . "\n"
-                . $cdna_alignment_obj->to_GTF_format(source => $cdna_alignment_obj->{source}) . "\n";
+                . $cdna_alignment_obj->to_GTF_format(gene_id => $cdna_acc, source => $cdna_alignment_obj->{source}) . "\n";
                         
         }
     }

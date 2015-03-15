@@ -30,7 +30,7 @@ my $usage = <<__EOUSAGE__;
 
 #####################################################################
 
- usage: $0  --genome genome.fasta [opts] Trinity_gmap.gff3 [Cufflinks.gtf ...]
+ usage: $0  --genome genome.fasta [opts] pasa_lite.valid_alignments.gtf
 
 
 ######################################################################################################
@@ -43,22 +43,12 @@ my $usage = <<__EOUSAGE__;
 #
 #   --CPU <int>                          : max number of concurrent threads (default: 2)
 #
-#
-#   --transcribed_is_aligned_orient      : flag, indicating strand-specific and transcripts 
-#                                        already oriented accordingly.  (default, not 
-#                                        trusting aligned orientation, define transcribed 
-#                                        orient based on splicing patterns.)
-# 
-#   --discard_unspliced_transcripts      :flag, any unspliced transcript alignment is set to invalid.
-#
 #   --out_prefix <string>                : prefix for output file names (default: 'pasa_lite')
 #
 #   --min_pct_iso_shared_sequence <int>  : minimum percent of shared exon shared between two isoforms
 #                                          to be joined into the same gene cluster.
 #                                          min_pct = ( shared_seq_len / shorter_isoform_len) * 100
 #                                          (default: 20)
-#
-#   --min_per_id <float>                 : min average percent identity of an alignment (default: 95)
 #
 #  Note: As is the PASA tradition, spliced transcripts having non-consensus dinucleotide splice sites
 #        are  treated as invalid.   (accepted pairs restricted to: GT-AG, GC-AG, and AT-AC)
@@ -74,23 +64,17 @@ __EOUSAGE__
 
 
 my $genome_fasta;
-my $transcribed_is_aligned_orient_flag = 0;
-my $require_consensus_splicesites_flag = 0;
-my $discard_unspliced_transcripts_flag = 0;
+
 my $out_prefix = "pasa_lite";
 my $MIN_PCT_OVERLAP = 20;
 my $CPU = 2;
-my $min_per_id = 95;
 
 &GetOptions ( 'h' => \$help_flag,
               'genome=s' => \$genome_fasta,
-              'transcribed_is_aligned_orient' => \$transcribed_is_aligned_orient_flag,
-              'require_consensus_splicesites' => \$require_consensus_splicesites_flag,
-              'discard_unspliced_transcripts' => \$discard_unspliced_transcripts_flag,
               'out_prefix=s' => \$out_prefix,
               'min_pct_iso_shared_sequence=i' => \$MIN_PCT_OVERLAP,
               'CPU=i' => \$CPU,
-              'min_per_id=f' => \$min_per_id,
+              
     );
 
 
@@ -112,15 +96,12 @@ unless ($genome_fasta && @gxf_files) {
 }
 
 
-my $invalid_lock : shared;
-my $valid_lock : shared;
 my $assembled_lock : shared;
 
 
 
 
 main: {
-
 
     print STDERR "-reading genome: $genome_fasta\n";
     my $fasta_retriever = new Fasta_retriever($genome_fasta);
@@ -135,26 +116,12 @@ main: {
 
     ## Perform validations, assign spliced orientation
         
-    ## prep outfiles, flush all filehandles after writes, no buffering since could cause problems w/ threads
-    open (my $ofh_invalid_alignments, ">$out_prefix.invalid_alignments.gtf") or die $!;
-    my $stdout = select $ofh_invalid_alignments;
-    $|=1;
-    open (my $ofh_valid_alignments, ">$out_prefix.valid_alignments.gtf") or die $!;
-    select($ofh_valid_alignments);
-    $|=1;
     open (my $ofh_assembled_alignments, ">$out_prefix.pasa_assembled_alignments.gtf") or die $!;
-    select $ofh_assembled_alignments;
+    my $stdout = select $ofh_assembled_alignments;
     $|=1;
 
     select $stdout;
     
-    
-       
-    my %all_FHs = (invalid => $ofh_invalid_alignments,
-                   valid => $ofh_valid_alignments,
-                   assembled => $ofh_assembled_alignments,
-        
-        );
     
     my $thread_helper = new Thread_helper($CPU);
 
@@ -166,16 +133,14 @@ main: {
         
         $thread_helper->wait_for_open_thread();
 
-        my $thread = threads->create('run_pasa', $scaff, $cdna_ids_aref, \$genome_seq, \%cdna_alignments, \%all_FHs);
+        my $thread = threads->create('run_pasa', $scaff, $cdna_ids_aref, \$genome_seq, \%cdna_alignments, $ofh_assembled_alignments);
         $thread_helper->add_thread($thread);
     }
     
     $thread_helper->wait_for_all_threads_to_complete();
 
     # close ofhs
-    foreach my $ofh (values %all_FHs) {
-        close $ofh;
-    }
+    close $ofh_assembled_alignments;
     
     my @failures = $thread_helper->get_failed_threads();
         
@@ -200,136 +165,78 @@ main: {
 
 ####
 sub run_pasa {
-    my ($scaff, $cdna_ids_aref, $genome_seq_sref, $cdna_alignments_href, $all_FHs_href) = @_;
-
-    &validate_transcript_alignments($cdna_ids_aref, $genome_seq_sref, $cdna_alignments_href); # also redefine spliced orientation
+    my ($scaff, $cdna_ids_aref, $genome_seq_sref, $cdna_alignments_href, $ofh_assembled_alignments) = @_;
     
     my @clustered_isoforms = &cluster_transcripts($cdna_ids_aref, $cdna_alignments_href);
     
-    &assemble_clusters($scaff, \@clustered_isoforms, $cdna_alignments_href, $cdna_ids_aref, $all_FHs_href);
-
-    return;
-
-}
-
-
-
-####
-sub assemble_clusters {
-    my ($scaff, $clustered_isoforms_aref, $cdna_alignments_href, $cdna_ids_aref, $all_FHs_href) = @_;
-    
-    my $invalid_fh = $all_FHs_href->{invalid};
-    my $valid_fh = $all_FHs_href->{valid};
-    my $assembled_fh = $all_FHs_href->{assembled};
-
-
-    my @all_assemblies;
-
     my %seen;
     
     my $gene_counter = 0;
 
-    foreach my $cluster (@$clustered_isoforms_aref) {
+    foreach my $cluster (@clustered_isoforms) {
         my @trans_ids = @$cluster;
         
         my @cdna_alignments_to_assemble;
         foreach my $trans_id (@trans_ids) {
             my $cdna_alignment_obj = $cdna_alignments_href->{$trans_id};
             
-            $gene_counter++;
-            
-            if (my $errors_text = $cdna_alignment_obj->get_error_flag()) {
-                # report in invalid set
-                lock $invalid_lock;
-                
-                print $invalid_fh "# $trans_id " . $cdna_alignment_obj->toToken() . " ERROR: $errors_text\n"
-                    . $cdna_alignment_obj->to_GTF_format(gene_id => "$scaff.g$gene_counter",
-                                                         source => $cdna_alignment_obj->{source},
-                    ) . "\n";
-            }
-            else {
-                
-                lock $valid_lock;
-
-                print $valid_fh "# $trans_id " . $cdna_alignment_obj->toToken() . "\n"
-                    . $cdna_alignment_obj->to_GTF_format(gene_id => "$scaff.g$gene_counter",
-                                                         source => $cdna_alignment_obj->{source},
-                    ) . "\n";
-
-                
-                push (@cdna_alignments_to_assemble, $cdna_alignment_obj);
-            }
-                        
-            $seen{$trans_id} = 1;
+            push (@cdna_alignments_to_assemble, $cdna_alignment_obj);
+                                    
+            $seen{$trans_id} = 1; # track as clustered
         }
         
-        if (scalar @cdna_alignments_to_assemble > 1) {
-            my $assembler = new CDNA::PASA_alignment_assembler();
-            
-            $assembler->assemble_alignments(@cdna_alignments_to_assemble);
-            
-            #print $assembler->toAlignIllustration(80);
-            #print "\n\n\n";
-            
-            my @assemblies = $assembler->get_assemblies();
-            
-            my @clustered_assemblies = &cluster_assemblies_via_exon_overlap(@assemblies);
 
-            foreach my $assembly_set (@clustered_assemblies) {
-                
-                $gene_counter++; # ensure each assembly set shares the same gene ID
-                
-                if (scalar @$assembly_set > 1) {
-                    print STDERR "******  Got Alt splicing involving: " . scalar(@$assembly_set) . " transcripts\n";
-                
-                    my $assembler = new CDNA::Genome_based_cDNA_assembler;
-                    $assembler->{incoming_alignments} = [@$assembly_set];
-                    $assembler->{assemblies} = [@$assembly_set];
-                    print STDERR $assembler->toAlignIllustration();
-                    
-
-                }
-                
-                my $iso_counter = 0;
-                
-                foreach my $assembly (@$assembly_set) {
-                    
-                    $iso_counter++;
-                    
-                    my $acc = $assembly->get_acc();
-                    $assembly->{genome_acc} = $scaff;
-                    
-                    print "ASSEMBLY: " . $assembly->toToken() . "\t$acc\n";
-                    
-                    lock $assembled_lock;
-            
-                    
-                    my $trans_id = "$scaff.g$gene_counter.i$iso_counter";
+        my $assembler = new CDNA::PASA_alignment_assembler();
         
-                    print $assembled_fh "# $trans_id => $acc " . $assembly->toToken() . "\n"
-                        . $assembly->to_GTF_format(gene_id => "$scaff.g$gene_counter",
-                                                   transcript_id => $trans_id,
-                        ) 
-                        . "\n";
-                }
+        $assembler->assemble_alignments(@cdna_alignments_to_assemble);
+        
+        #print $assembler->toAlignIllustration(80);
+        #print "\n\n\n";
+        
+        my @assemblies = $assembler->get_assemblies();
+        
+        my @clustered_assemblies = &cluster_assemblies_via_exon_overlap(@assemblies);
+        
+        foreach my $assembly_set (@clustered_assemblies) {
+            
+            $gene_counter++; # ensure each assembly set shares the same gene ID
+            
+            if (scalar @$assembly_set > 1) {
+                print STDERR "******  Got Alt splicing involving: " . scalar(@$assembly_set) . " transcripts\n";
+                
+                my $assembler = new CDNA::Genome_based_cDNA_assembler;
+                $assembler->{incoming_alignments} = [@$assembly_set];
+                $assembler->{assemblies} = [@$assembly_set];
+                print STDERR $assembler->toAlignIllustration();
+                
+                
+            }
+            
+            my $iso_counter = 0;
+            
+            foreach my $assembly (@$assembly_set) {
+                
+                $iso_counter++;
+                
+                my $acc = $assembly->get_acc();
+                $assembly->{genome_acc} = $scaff;
+                
+                print "ASSEMBLY: " . $assembly->toToken() . "\t$acc\n";
+                
+                lock $assembled_lock;
+                
+                
+                my $trans_id = "$scaff.g$gene_counter.i$iso_counter";
+                
+                print $ofh_assembled_alignments "# $trans_id => $acc " . $assembly->toToken() . "\n"
+                    . $assembly->to_GTF_format(gene_id => "$scaff.g$gene_counter",
+                                               transcript_id => $trans_id,
+                    ) 
+                    . "\n";
             }
         }
-        elsif (@cdna_alignments_to_assemble == 1) {
-            ## just report the transcript itself, no assembly required
-            
-            my $cdna_alignment_obj = shift @cdna_alignments_to_assemble;
-            
-            my $acc = $cdna_alignment_obj->get_acc();
-            
-            lock $assembled_lock;
-            
-            print $assembled_fh "# $acc " . $cdna_alignment_obj->toToken() . "\n"
-                . $cdna_alignment_obj->to_GTF_format(gene_id => "$scaff.g$gene_counter") . "\n";
-                        
-        }
-                
     }
-    
+        
     
     ## Report those singletons that do not require assembly
   singletons: {
@@ -339,38 +246,15 @@ sub assemble_clusters {
           unless ($seen{$cdna_acc}) {
             
               $gene_counter++;
-  
+              
               my $cdna_alignment_obj = $cdna_alignments_href->{$cdna_acc};
               
-              if (my $errors_text = $cdna_alignment_obj->get_error_flag()) {
-                  
-                  lock $invalid_lock;
-                  
-                  print $invalid_fh "# $cdna_acc " . $cdna_alignment_obj->toToken() . " ERROR: $errors_text\n"
-                      . $cdna_alignment_obj->to_GTF_format(gene_id => "$scaff.g$gene_counter",
-                                                           source => $cdna_alignment_obj->{source},
-                      ) . "\n"; 
-              }
-              else {
-                  
-                  {
-                      lock $assembled_lock;
-                      
-                      print $assembled_fh "# $cdna_acc " . $cdna_alignment_obj->toToken() . "\n"
-                          . $cdna_alignment_obj->to_GTF_format(gene_id => "$scaff.g$gene_counter") . "\n";
-                  }
-                  
-                  {
-                      lock $valid_lock;
-                      
-                      print $valid_fh "# $cdna_acc " . $cdna_alignment_obj->toToken() . "\n"
-                          . $cdna_alignment_obj->to_GTF_format(gene_id => "$scaff.g$gene_counter",
-                                                               source => $cdna_alignment_obj->source(),
-                          ) . "\n";
-                  }
-              }
+              
+              lock $assembled_lock;
+              
+              print $ofh_assembled_alignments "# $cdna_acc " . $cdna_alignment_obj->toToken() . "\n"
+                  . $cdna_alignment_obj->to_GTF_format(gene_id => "$scaff.g$gene_counter") . "\n";
           }
-          
           
           
       }
@@ -378,45 +262,6 @@ sub assemble_clusters {
     }
     
     return;
-}
-
-
-
-####
-sub validate_transcript_alignments {
-    my ($cdna_ids_aref, $genome_seq_sref, $cdna_alignments_href) = @_;
-    
-    foreach my $cdna_acc (@$cdna_ids_aref) {
-
-        my $cdna_alignment_obj = $cdna_alignments_href->{$cdna_acc};
-        
-        if ($transcribed_is_aligned_orient_flag) {
-            $cdna_alignment_obj->set_spliced_orientation( $cdna_alignment_obj->get_aligned_orientation() );
-        }
-        
-        
-        if ($cdna_alignment_obj->get_num_segments() > 1) {
-            $cdna_alignment_obj->identify_splice_junctions($genome_seq_sref);
-        }
-        else {
-            # single-exon alignment
-            if ($discard_unspliced_transcripts_flag) {
-                $cdna_alignment_obj->set_error_flag("single-segment alignment invalid due to --discard_unspliced_transcripts param set");
-            }
-        }
-
-        # check percent identity
-        
-        my $per_id = $cdna_alignment_obj->get_avg_per_id();
-        if (defined($per_id) && $per_id < $min_per_id) {
-            $cdna_alignment_obj->set_error_flag("avg per_id $per_id < min required ($min_per_id)");
-        }
-        
-
-    }
-    
-    return;
-
 }
 
 
