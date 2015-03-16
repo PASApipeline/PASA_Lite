@@ -13,7 +13,6 @@ use lib ("$FindBin::Bin/PerlLib");
 use GFF3_alignment_utils;
 use GTF_alignment_utils;
 use Overlap_piler;
-use Fasta_retriever;
 use SingleLinkageClusterer;
 use CDNA::PASA_alignment_assembler;
 use CDNA::Genome_based_cDNA_assembler;
@@ -30,15 +29,9 @@ my $help_flag;
 my $usage = <<__EOUSAGE__;
 
 #####################################################################
-
- usage: $0  --genome genome.fasta [opts] pasa_lite.valid_alignments.gtf
-
-
-######################################################################################################
 #
-#  Required:
+#  usage: $0 [opts] pasa_lite.valid_alignments.gtf
 #
-#   --genome <string>                    : genome.fasta
 #
 #  Optional:
 #
@@ -64,14 +57,12 @@ __EOUSAGE__
     ;
 
 
-my $genome_fasta;
 
 my $out_prefix = "pasa_lite";
 my $MIN_PCT_OVERLAP = 20;
 my $CPU = 2;
 
 &GetOptions ( 'h' => \$help_flag,
-              'genome=s' => \$genome_fasta,
               'out_prefix=s' => \$out_prefix,
               'min_pct_iso_shared_sequence=i' => \$MIN_PCT_OVERLAP,
               'CPU=i' => \$CPU,
@@ -92,7 +83,7 @@ if ($help_flag) {
     die $usage;
 }
 
-unless ($genome_fasta && @gxf_files) {
+unless (@gxf_files) {
     die $usage;
 }
 
@@ -103,10 +94,6 @@ my $assembled_lock : shared;
 
 
 main: {
-
-    print STDERR "-reading genome: $genome_fasta\n";
-    my $fasta_retriever = new Fasta_retriever($genome_fasta);
-
 
     my $tmp_db = "tmp.$$.inx";
         
@@ -138,11 +125,9 @@ main: {
         
         my $cdna_ids_aref = $scaff_to_cdna_list{$scaff};
         
-        my $genome_seq = $fasta_retriever->get_seq($scaff);
-        
         $thread_helper->wait_for_open_thread();
 
-        my $thread = threads->create('run_pasa', $scaff, $cdna_ids_aref, \$genome_seq, $tmp_db, $ofh_assembled_alignments);
+        my $thread = threads->create('run_pasa', $scaff, $cdna_ids_aref, $tmp_db, $ofh_assembled_alignments);
         $thread_helper->add_thread($thread);
     }
     
@@ -176,7 +161,7 @@ main: {
 
 ####
 sub run_pasa {
-    my ($scaff, $cdna_ids_aref, $genome_seq_sref, $tmp_db, $ofh_assembled_alignments) = @_;
+    my ($scaff, $cdna_ids_aref, $tmp_db, $ofh_assembled_alignments) = @_;
 
     print STDERR "-assembling alignments on $scaff\n";
         
