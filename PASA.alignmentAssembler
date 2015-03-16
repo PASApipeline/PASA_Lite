@@ -23,6 +23,8 @@ use Gene_obj_indexer;
 use Thread_helper;
 
 
+$ENV{PATH} = "$FindBin::Bin/bin:$ENV{PATH}";
+
 my $help_flag;
 
 

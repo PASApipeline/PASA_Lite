@@ -15,7 +15,7 @@ my @files_to_keep = qw (cleanme.pl
                         blat.spliced_alignments.gff3
 genome_sample.fasta
 gmap.spliced_alignments.gff3
-runMe.sh
+runMe.pl
 );
 
 
