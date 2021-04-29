@@ -108,8 +108,10 @@ my $valid_lock : shared;
 main: {
 
 
-    my $tmp_db = "tmp.$$.inx";
+    my $tmpdir = $ENV{TMPDIR} || "/tmp";
 
+    my $tmp_db = "$tmpdir/tmp.$$.inx";
+    
 
     my %scaff_to_cdna_list;
 
