@@ -30,6 +30,8 @@ sub index_alignment_objs {
     	
 	my %genome_trans_to_alignment_segments;
 	
+    my %trans_to_gene_id;
+
 	open (my $fh, $gtf_alignment_file) or die "Error, cannot open file $gtf_alignment_file";
 	while (<$fh>) {
 		chomp;
@@ -38,7 +40,7 @@ sub index_alignment_objs {
 		
 		my @x = split(/\t/);
 
-		unless (scalar (@x) >= 8 && $x[8] =~ /transcript_id/) {
+		unless (scalar (@x) >= 8) { 
 			print STDERR "ignoring line: $_\n";
 			next;
 		}
@@ -51,7 +53,11 @@ sub index_alignment_objs {
         
         unless ($type eq 'exon') { next; }
         
-
+        unless($x[8] =~ /transcript_id/) {
+            print STDERR "ignoring line: $_\n";
+			next;
+        }
+        
         if ($per_id eq ".") { $per_id = 100; } # making an assumption here.
         
 		my $orient = $x[6];
@@ -65,8 +71,8 @@ sub index_alignment_objs {
 			$part =~ s/\"//g;
 			my ($att, $val) = split(/\s+/, $part);
 			
-			if (exists $atts{$att}) {
-				die "Error, already defined attribute $att in $_";
+			if (exists $atts{$att} && $att ne "tag") {
+				die "Error, already defined attribute [$att] in @parts";
 			}
 			
 			$atts{$att} = $val;
@@ -76,6 +82,8 @@ sub index_alignment_objs {
 		my $trans_id = $atts{transcript_id} or die "Error, no trans_id at $_";
         
 		        
+        $trans_to_gene_id{$trans_id} = $gene_id;
+
         push (@{$genome_trans_to_alignment_segments{$scaff}->{$trans_id}}, [$lend, $rend, $orient]);
                 
     }
@@ -117,6 +125,8 @@ sub index_alignment_objs {
             $cdna_alignment_obj->set_acc($alignment_acc);
             $cdna_alignment_obj->{genome_acc} = $scaff;
 
+            $cdna_alignment_obj->{gene_id} = $trans_to_gene_id{$alignment_acc};
+            
             my $spliced_orient = $orient;
             if ($spliced_orient !~ /^[\+\-]$/) {
                 $spliced_orient = '?';
