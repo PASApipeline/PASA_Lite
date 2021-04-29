@@ -119,8 +119,14 @@ main: {
         my $cdna_alignments_indexer = new Gene_obj_indexer( { create => $tmp_db } );
 
         foreach my $gxf_file (@gxf_files) {
-            print STDERR "-parsing $gxf_file\n";
-            &add_cdna_alignments($gxf_file, $cdna_alignments_indexer, \%scaff_to_cdna_list);
+            
+            if (! -e $gxf_file) {
+                die "Error, cannot find file: $gxf_file";
+            }
+            if (-s $gxf_file) {
+                print STDERR "-parsing $gxf_file\n";
+                &add_cdna_alignments($gxf_file, $cdna_alignments_indexer, \%scaff_to_cdna_list);
+            }
         }
     }
     
