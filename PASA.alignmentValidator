@@ -24,6 +24,13 @@ use DB_File;
 my $help_flag;
 
 
+my $min_percent_aligned = 90;
+my $min_per_id = 95;
+my $out_prefix = "pasa_lite";
+my $CPU = 2;
+
+
+
 my $usage = <<__EOUSAGE__;
 
 #####################################################################
@@ -41,7 +48,7 @@ my $usage = <<__EOUSAGE__;
 #
 #  Optional:
 #
-#   --CPU <int>                          : max number of concurrent threads (default: 2)
+#   --CPU <int>                          : max number of concurrent threads (default: $CPU)
 ## 
 #   --transcribed_is_aligned_orient      : flag, indicating strand-specific and transcripts 
 #                                        already oriented accordingly.  (default, not 
@@ -51,11 +58,11 @@ my $usage = <<__EOUSAGE__;
 #
 #   --discard_unspliced_transcripts      :flag, any unspliced transcript alignment is set to invalid.
 #
-#   --out_prefix <string>                : prefix for output file names (default: 'pasa_lite')
+#   --out_prefix <string>                : prefix for output file names (default: $out_prefix)
 #
-#   --min_per_id <float>                 : min average percent identity of an alignment (default: 95)
+#   --min_per_id <float>                 : min average percent identity of an alignment (default: $min_per_id)
 #
-#   --min_percent_aligned <float>        : min percent of transcript length aligned (default: 90)
+#   --min_percent_aligned <float>        : min percent of transcript length aligned (default: $min_percent_aligned)
 #
 #  Note: As is the PASA tradition, spliced transcripts having non-consensus dinucleotide splice sites
 #        are  treated as invalid.   (accepted pairs restricted to: GT-AG, GC-AG, and AT-AC)
@@ -74,10 +81,8 @@ my $genome_fasta;
 my $transcribed_is_aligned_orient_flag = 0;
 my $require_consensus_splicesites_flag = 0;
 my $discard_unspliced_transcripts_flag = 0;
-my $out_prefix = "pasa_lite";
-my $CPU = 2;
-my $min_per_id = 95;
 my $transcripts_files;
+
 
 &GetOptions ( 'h' => \$help_flag,
               'genome=s' => \$genome_fasta,
@@ -88,6 +93,7 @@ my $transcripts_files;
               'out_prefix=s' => \$out_prefix,
               'CPU=i' => \$CPU,
               'min_per_id=f' => \$min_per_id,
+              'min_percent_aligned=f' => \$min_percent_aligned,
     );
 
 
@@ -156,7 +162,8 @@ main: {
         
         $thread_helper->wait_for_open_thread();
 
-        my $thread = threads->create('validate_transcript_alignments', $scaff, $scaff_to_cdna_list_index_file, $trans_lengths_db, $fasta_retriever, $alignments_db, \%all_FHs);
+        my $thread = threads->create('validate_transcript_alignments', $scaff, $scaff_to_cdna_list_index_file, 
+                                     $trans_lengths_db, $fasta_retriever, $alignments_db, \%all_FHs);
         $thread_helper->add_thread($thread);
     }
     
@@ -231,6 +238,8 @@ sub validate_transcript_alignments {
         
         my $cdna_length = $trans_lengths{$cdna_acc} or confess "Error, no transcript length found for: $cdna_acc";
         
+        $cdna_alignment_obj->{cdna_length} = $cdna_length;
+
         if ($transcribed_is_aligned_orient_flag) {
             $cdna_alignment_obj->set_spliced_orientation( $cdna_alignment_obj->get_aligned_orientation() );
         }
@@ -265,7 +274,14 @@ sub validate_transcript_alignments {
         if (defined($per_id) && $per_id < $min_per_id) {
             $cdna_alignment_obj->set_error_flag("avg per_id $per_id < min required ($min_per_id)");
         }
+
+        # check alignment percent length
+        $cdna_alignment_obj->determine_alignment_attributes();
+        my $percent_length = $cdna_alignment_obj->{percent_cdna_aligned};
         
+        if ($percent_length < $min_percent_aligned) {
+            $cdna_alignment_obj->set_error_flag($cdna_alignment_obj->get_error_flag() . "; percent aligned ($percent_length) < min required ($min_percent_aligned)");
+        }
         
         #######################
         ## Output to gtf files
