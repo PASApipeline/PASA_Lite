@@ -16,6 +16,7 @@ use GTF_alignment_utils;
 use Fasta_retriever_faidx;
 use List::Util qw(min max);
 use Gene_obj_indexer;
+use Data::Dumper;
 
 use Thread_helper;
 use DB_File;
@@ -36,6 +37,8 @@ my $usage = <<__EOUSAGE__;
 #
 #   --genome <string>                    : genome.fasta
 #
+#   --transcripts <string>               : transcript fasta files (comma-delimited if multiple)
+#
 #  Optional:
 #
 #   --CPU <int>                          : max number of concurrent threads (default: 2)
@@ -51,6 +54,8 @@ my $usage = <<__EOUSAGE__;
 #   --out_prefix <string>                : prefix for output file names (default: 'pasa_lite')
 #
 #   --min_per_id <float>                 : min average percent identity of an alignment (default: 95)
+#
+#   --min_percent_aligned <float>        : min percent of transcript length aligned (default: 90)
 #
 #  Note: As is the PASA tradition, spliced transcripts having non-consensus dinucleotide splice sites
 #        are  treated as invalid.   (accepted pairs restricted to: GT-AG, GC-AG, and AT-AC)
@@ -72,9 +77,11 @@ my $discard_unspliced_transcripts_flag = 0;
 my $out_prefix = "pasa_lite";
 my $CPU = 2;
 my $min_per_id = 95;
+my $transcripts_files;
 
 &GetOptions ( 'h' => \$help_flag,
               'genome=s' => \$genome_fasta,
+              'transcripts=s' => \$transcripts_files,
               'require_consensus_splicesites' => \$require_consensus_splicesites_flag,
               'discard_unspliced_transcripts' => \$discard_unspliced_transcripts_flag,
               'transcribed_is_aligned_orient' => \$transcribed_is_aligned_orient_flag,
@@ -92,12 +99,13 @@ if (@unrecognized_args) {
 
 my @gxf_files = @ARGV;
 
+print "GXF files: @gxf_files\n";
 
 if ($help_flag) {
     die $usage;
 }
 
-unless ($genome_fasta && @gxf_files) {
+unless ($genome_fasta && @gxf_files && $transcripts_files) {
     die $usage;
 }
 
@@ -107,47 +115,21 @@ my $valid_lock : shared;
 
 main: {
 
-
     my $tmpdir = $ENV{TMPDIR} || "/tmp";
 
-    my $tmp_db = "$tmpdir/tmp.$$.inx";
-    my $scaff_to_cdna_list_index_file = "$tmp_db.scaff_to_cdnas";
-
-
-    my @scaffolds;
-
-
-    index_alignments: {
-
-        print STDERR "-indexing cdna alignments\n";
-        my %scaff_to_cdna_list;
+    my $tmp_db_prefix = "$tmpdir/tmp.$$.inx";
     
-        my $cdna_alignments_indexer = new Gene_obj_indexer( { create => $tmp_db } );
+    my $alignments_db = "$tmp_db_prefix.cdna_alignments";
+    my $scaff_to_cdna_list_index_file = "$tmp_db_prefix.scaff_to_cdnas";
+    my $trans_lengths_db = "$tmp_db_prefix.trans_lengths";
 
-        foreach my $gxf_file (@gxf_files) {
-            
-            if (! -e $gxf_file) {
-                die "Error, cannot find file: $gxf_file";
-            }
-            if (-s $gxf_file) {
-                print STDERR "-parsing $gxf_file\n";
-                &add_cdna_alignments($gxf_file, $cdna_alignments_indexer, \%scaff_to_cdna_list);
-            }
-        }
-            
-        @scaffolds = keys %scaff_to_cdna_list;
-            
-        my $scaff_to_cdna_list_txt_href = {};
-        tie (%{$scaff_to_cdna_list_txt_href}, 'DB_File', $scaff_to_cdna_list_index_file, O_CREAT|O_RDWR, 0666, $DB_BTREE);
-        for my $scaff (keys %scaff_to_cdna_list) {
-            my @cdnas = @{$scaff_to_cdna_list{$scaff}};
-            $scaff_to_cdna_list_txt_href->{$scaff} = join("$;", @cdnas);
-        }
-        %scaff_to_cdna_list = (); # clear
-        untie(%{$scaff_to_cdna_list_txt_href});
-    }
+    print STDERR "-parsing transcript lengths\n";
+    &store_trans_lengths($trans_lengths_db, $transcripts_files);
     
 
+    my @scaffolds = &index_alignments($alignments_db, $scaff_to_cdna_list_index_file, [@gxf_files]);
+    #print "scaffolds: @scaffolds\n";
+    
     ## Perform validations, assign spliced orientation
     print STDERR "-reading genome: $genome_fasta\n";
     my $fasta_retriever = new Fasta_retriever_faidx($genome_fasta);
@@ -174,7 +156,7 @@ main: {
         
         $thread_helper->wait_for_open_thread();
 
-        my $thread = threads->create('validate_transcript_alignments', $scaff, $scaff_to_cdna_list_index_file, $fasta_retriever, $tmp_db, \%all_FHs);
+        my $thread = threads->create('validate_transcript_alignments', $scaff, $scaff_to_cdna_list_index_file, $trans_lengths_db, $fasta_retriever, $alignments_db, \%all_FHs);
         $thread_helper->add_thread($thread);
     }
     
@@ -184,11 +166,11 @@ main: {
     foreach my $ofh (values %all_FHs) {
         close $ofh;
     }
-
-    unlink($tmp_db);
-    unlink($scaff_to_cdna_list_index_file);
     
-
+    unlink($alignments_db);
+    unlink($scaff_to_cdna_list_index_file);
+    unlink($trans_lengths_db);
+    
     my @failures = $thread_helper->get_failed_threads();
         
     if (@failures) {
@@ -213,12 +195,14 @@ main: {
 
 ####
 sub validate_transcript_alignments {
-    my ($scaff, $scaff_to_cdna_list_index_file, $fasta_retriever, $tmp_db, $all_FHs_href) = @_;
+    my ($scaff, $scaff_to_cdna_list_index_file, $trans_lengths_db, $fasta_retriever, $alignments_db, $all_FHs_href) = @_;
 
     my %cdnas_idx;
     tie (%cdnas_idx, 'DB_File', $scaff_to_cdna_list_index_file, O_RDONLY, 0, $DB_BTREE);
     
-
+    my %trans_lengths;
+    tie (%trans_lengths, 'DB_File', $trans_lengths_db, O_RDONLY, 0, $DB_BTREE);
+    
     my $cdna_ids = $cdnas_idx{$scaff};
     my @cdna_ids_list = split(/$;/, $cdna_ids);
     my $cdna_ids_aref = \@cdna_ids_list;
@@ -228,15 +212,24 @@ sub validate_transcript_alignments {
     
     print STDERR "-validating transcript alignments on scaffold: $scaff\n";
     
-    my $cdna_alignments_indexer = new Gene_obj_indexer( { 'use' => $tmp_db } );
+    my $cdna_alignments_indexer = new Gene_obj_indexer( { 'use' => $alignments_db } );
     
+    
+
     my $invalid_fh = $all_FHs_href->{invalid};
     my $valid_fh = $all_FHs_href->{valid};
     
+    
+    foreach my $cdna_alignment_id (@$cdna_ids_aref) {
 
-    foreach my $cdna_acc (@$cdna_ids_aref) {
+        my $cdna_alignment_obj = $cdna_alignments_indexer->get_gene($cdna_alignment_id);
+        
+        #print Dumper($cdna_alignment_obj);
+        #die;
 
-        my $cdna_alignment_obj = $cdna_alignments_indexer->get_gene($cdna_acc);
+        my $cdna_acc = $cdna_alignment_obj->get_acc(); 
+        
+        my $cdna_length = $trans_lengths{$cdna_acc} or confess "Error, no transcript length found for: $cdna_acc";
         
         if ($transcribed_is_aligned_orient_flag) {
             $cdna_alignment_obj->set_spliced_orientation( $cdna_alignment_obj->get_aligned_orientation() );
@@ -362,3 +355,72 @@ sub cluster_transcripts {
     return(@sl_clusters);
 }
 
+
+####
+sub store_trans_lengths {
+    my ($trans_lengths_db, $transcripts_files) = @_;
+    
+    my %trans_lengths;
+    tie (%trans_lengths, 'DB_File', $trans_lengths_db, O_CREAT|O_RDWR, 0666, $DB_BTREE); 
+    
+    my @transcript_files_list = split(/,/, $transcripts_files);
+    
+    foreach my $transcript_file (@transcript_files_list) {
+        
+        my $fai_file = "$transcript_file.fai";
+        if (! -s $fai_file) {
+            my $ret = system("samtools faidx $transcript_file");
+            if ($ret) {
+                confess "Error, samtools faidx $transcript_file  died with ret $ret";
+            }
+        }
+        open(my $fh, $fai_file) or confess "Error, cannot open file: $fai_file";
+        while(<$fh>) {
+            chomp;
+            my ($transcript_id, $seq_len, @rest) = split(/\t/);
+            $trans_lengths{$transcript_id} = $seq_len;
+        }
+    }
+    
+    untie(%trans_lengths);
+    
+    return;
+}
+
+
+####
+sub index_alignments {
+    my ($alignments_db, $scaff_to_cdna_list_index_file, $gxf_files_aref) = @_;
+    
+    print STDERR "-indexing cdna alignments from files: [@$gxf_files_aref]\n";
+    my %scaff_to_cdna_list;
+    
+    my $cdna_alignments_indexer = new Gene_obj_indexer( { create => $alignments_db } );
+    
+    foreach my $gxf_file (@$gxf_files_aref) {
+        
+        if (! -e $gxf_file) {
+            die "Error, cannot find file: $gxf_file";
+        }
+        if (-s $gxf_file) {
+            print STDERR "-parsing $gxf_file\n";
+            &add_cdna_alignments($gxf_file, $cdna_alignments_indexer, \%scaff_to_cdna_list);
+        }
+    }
+    
+    my @scaffolds = keys %scaff_to_cdna_list;
+    
+    my %scaff_to_cdna_list_txt;
+    tie (%scaff_to_cdna_list_txt, 'DB_File', $scaff_to_cdna_list_index_file, O_CREAT|O_RDWR, 0666, $DB_BTREE);
+    for my $scaff (keys %scaff_to_cdna_list) {
+        my @cdnas = @{$scaff_to_cdna_list{$scaff}};
+        $scaff_to_cdna_list_txt{$scaff} = join("$;", @cdnas);
+    }
+    %scaff_to_cdna_list = (); # clear
+    untie(%scaff_to_cdna_list_txt);
+    
+
+    return @scaffolds;
+
+}
+    
