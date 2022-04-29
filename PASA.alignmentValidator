@@ -13,7 +13,7 @@ use lib ("$FindBin::Bin/PerlLib");
 
 use GFF3_alignment_utils;
 use GTF_alignment_utils;
-use Fasta_retriever;
+use Fasta_retriever_faidx;
 use List::Util qw(min max);
 use Gene_obj_indexer;
 
@@ -132,8 +132,8 @@ main: {
     
     ## Perform validations, assign spliced orientation
     print STDERR "-reading genome: $genome_fasta\n";
-    my $fasta_retriever = new Fasta_retriever($genome_fasta);
-            
+    my $fasta_retriever = new Fasta_retriever_faidx($genome_fasta);
+    
     ## prep outfiles, flush all filehandles after writes, no buffering since could cause problems w/ threads
     open (my $ofh_invalid_alignments, ">$out_prefix.invalid_alignments.gtf") or die $!;
     my $stdout = select $ofh_invalid_alignments;
@@ -156,11 +156,9 @@ main: {
         
         my $cdna_ids_aref = $scaff_to_cdna_list{$scaff};
         
-        my $genome_seq = $fasta_retriever->get_seq($scaff);
-        
         $thread_helper->wait_for_open_thread();
 
-        my $thread = threads->create('validate_transcript_alignments', $scaff, $cdna_ids_aref, \$genome_seq, $tmp_db, \%all_FHs);
+        my $thread = threads->create('validate_transcript_alignments', $scaff, $cdna_ids_aref, $fasta_retriever, $tmp_db, \%all_FHs);
         $thread_helper->add_thread($thread);
     }
     
@@ -198,7 +196,9 @@ main: {
 
 ####
 sub validate_transcript_alignments {
-    my ($scaff, $cdna_ids_aref, $genome_seq_sref, $tmp_db, $all_FHs_href) = @_;
+    my ($scaff, $cdna_ids_aref, $fasta_retriever, $tmp_db, $all_FHs_href) = @_;
+    
+    my $genome_seq = $fasta_retriever->get_seq($scaff);
     
     print STDERR "-validating transcript alignments on scaffold: $scaff\n";
     
@@ -221,7 +221,7 @@ sub validate_transcript_alignments {
             
             ## Multi-exon transcripts
 
-            $cdna_alignment_obj->identify_splice_junctions($genome_seq_sref);
+            $cdna_alignment_obj->identify_splice_junctions(\$genome_seq);
             
             ## ensure proper transcribed orientation in the outputted gtf file
             #  flip it if the splice sites indicate the sequence is reverse-complemented wrt strand 
