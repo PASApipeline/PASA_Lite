@@ -26,7 +26,7 @@ sub index_alignment_objs {
     
        	
 	my %genome_trans_to_alignment_segments;
-    my %trans_to_gene_id;
+    my %align_id_to_target_transcript;
 
 	
 	open (my $fh, $gff3_alignment_file) or die "Error, cannot open file $gff3_alignment_file";
@@ -67,18 +67,14 @@ sub index_alignment_objs {
 			$atts{$att} = $val;
 		}
 
-		my $gene_id = $atts{ID} or die "Error, no gene_id at $_";
-		my $trans_id = $atts{Target} or die "Error, no trans_id at $_";
-		{
-			my @pieces = split(/\s+/, $trans_id);
-			$trans_id = shift @pieces;
-		}
+		my $align_id = $atts{ID} or die "Error, no gene_id at $_";
 		
 		my ($end5, $end3) = ($orient eq '+') ? ($lend, $rend) : ($rend, $lend);
         
-        $info =~ /Target=\S+ (\d+) (\d+)/ or die "Error, cannot extract match coordinates from info: $info";
-        my $cdna_seg_lend = $1;
-        my $cdna_seg_rend = $2;
+        $info =~ /Target=(\S+) (\d+) (\d+)/ or die "Error, cannot extract match coordinates from info: $info";
+        my $target_trans_id = $1;
+        my $cdna_seg_lend = $2;
+        my $cdna_seg_rend = $3;
         
         ($cdna_seg_lend, $cdna_seg_rend) = sort {$a<=>$b} ($cdna_seg_lend, $cdna_seg_rend); # always + orient for transcript coords.
         
@@ -86,13 +82,13 @@ sub index_alignment_objs {
         my $alignment_segment = new CDNA::Alignment_segment($end5, $end3, $cdna_seg_lend, $cdna_seg_rend, $per_id);
         
 
-        push (@{$genome_trans_to_alignment_segments{$scaff}->{$trans_id}}, $alignment_segment);
+        push (@{$genome_trans_to_alignment_segments{$scaff}->{$align_id}}, $alignment_segment);
         
-		$trans_to_gene_id{$trans_id} = $gene_id;
+		$align_id_to_target_transcript{$align_id} = $target_trans_id;
         
 	}
     
-
+    
     my %scaff_to_align_list;
     
     
@@ -118,11 +114,10 @@ sub index_alignment_objs {
             $cdna_alignment_obj->set_acc($alignment_acc);
             $cdna_alignment_obj->{genome_acc} = $scaff;
             
-            my $gene_id = $trans_to_gene_id{$alignment_acc} or confess "Error no gene_id for acc: $alignment_acc";
+            my $gene_id = $align_id_to_target_transcript{$alignment_acc} or confess "Error no gene_id for acc: $alignment_acc";
 
             $cdna_alignment_obj->{gene_id} = $gene_id;
             
-
             $cdna_alignment_obj->{source} = basename($gff3_alignment_file);
             
             if (ref $genome_alignment_indexer_href eq "Gene_obj_indexer") {

@@ -247,7 +247,7 @@ sub validate_transcript_alignments {
         #print Dumper($cdna_alignment_obj);
         #die;
 
-        my $cdna_acc = $cdna_alignment_obj->get_acc(); 
+        my $cdna_acc = $cdna_alignment_obj->{gene_id} or confess "Error, no gene set for $cdna_alignment_id object"; 
         
         my $cdna_length = $trans_lengths{$cdna_acc} or confess "Error, no transcript length found for: $cdna_acc";
         
