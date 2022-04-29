@@ -133,9 +133,7 @@ main: {
     print STDERR "-parsing transcript lengths\n";
     &store_trans_lengths($trans_lengths_db, $transcripts_files);
     
-
     my @scaffolds = &index_alignments($alignments_db, $scaff_to_cdna_list_index_file, [@gxf_files]);
-    #print "scaffolds: @scaffolds\n";
     
     ## Perform validations, assign spliced orientation
     print STDERR "-reading genome: $genome_fasta\n";
@@ -157,7 +155,7 @@ main: {
                                 "per_id", "per_length",
                                 "valid_status",
                                 "sum_fails", "splice_fail", "per_id_fail", "per_length_fail",
-                                "alignment_token",
+                                "genome_acc", "alignment_token",
                                 "errors_txt") . "\n"; # header
     
     select $stdout;
@@ -346,11 +344,13 @@ sub validate_transcript_alignments {
         $errors_text =~ s/\s+/_/g;
         $alignment_token =~ s/\s+/_/g;
         
+        my $genome_acc = $cdna_alignment_obj->{genome_acc};
+        
         my $stats_line = join("\t", $cdna_acc, $cdna_alignment_id, $alignment_score, $num_segments,
                                  $per_id, sprintf("%.1f", $percent_length),
                                  $alignment_valid_status, 
                                  $sum_fails, $SPLICE_FAIL, $PER_ID_FAIL, $PER_LENGTH_FAIL,
-                                 $alignment_token, 
+                                 $genome_acc, $alignment_token, 
                                  $errors_text);
         
         if ($alignment_valid_status eq "VALID" && $sum_fails > 0) {
@@ -494,8 +494,9 @@ sub index_alignments {
     }
     %scaff_to_cdna_list = (); # clear
     untie(%scaff_to_cdna_list_txt);
-    
 
+    $cdna_alignments_indexer->DESTROY();
+    
     return @scaffolds;
 
 }
