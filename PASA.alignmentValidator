@@ -111,13 +111,17 @@ main: {
     my $tmpdir = $ENV{TMPDIR} || "/tmp";
 
     my $tmp_db = "$tmpdir/tmp.$$.inx";
-    
+    my $scaff_to_cdna_list_index_file = "$tmp_db.scaff_to_cdnas";
 
-    print STDERR "-indexing cdna alignments\n";
-    my %scaff_to_cdna_list;
-    
-    
+
+    my @scaffolds;
+
+
     index_alignments: {
+
+        print STDERR "-indexing cdna alignments\n";
+        my %scaff_to_cdna_list;
+    
         my $cdna_alignments_indexer = new Gene_obj_indexer( { create => $tmp_db } );
 
         foreach my $gxf_file (@gxf_files) {
@@ -130,13 +134,9 @@ main: {
                 &add_cdna_alignments($gxf_file, $cdna_alignments_indexer, \%scaff_to_cdna_list);
             }
         }
-    }
-    
-    
-    my @scaffolds = keys %scaff_to_cdna_list;
-    
-    my $scaff_to_cdna_list_index_file = "$tmp_db.scaff_to_cdnas";
-    {
+            
+        @scaffolds = keys %scaff_to_cdna_list;
+            
         my $scaff_to_cdna_list_txt_href = {};
         tie (%{$scaff_to_cdna_list_txt_href}, 'DB_File', $scaff_to_cdna_list_index_file, O_CREAT|O_RDWR, 0666, $DB_BTREE);
         for my $scaff (keys %scaff_to_cdna_list) {
@@ -144,6 +144,7 @@ main: {
             $scaff_to_cdna_list_txt_href->{$scaff} = join("$;", @cdnas);
         }
         %scaff_to_cdna_list = (); # clear
+        untie(%{$scaff_to_cdna_list_txt_href});
     }
     
 
