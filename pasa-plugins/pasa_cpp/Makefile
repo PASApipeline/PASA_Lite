@@ -4,8 +4,8 @@
 PROJECTDIR = .
 BINDIR = .
 
-CC = g++
-CPPC = ${CC}
+#CC = g++
+#CPPC = ${CC}
 #CFLAGS = -g -Wall -O3
 #CFLAGS = -ggdb 
 #  add -xloopinfo to get feedback about -xautopar
@@ -23,7 +23,7 @@ CFLAGS = -O3
 
 
 DEPEND_FILES = *.cpp *.c *.h
-CLEANABLE_FILES = *.o *~ *\#
+CLEANABLE_FILES = *.o *~ *\# pasa
 
 ALL = pasa 
 OBJECTS = alignment_segment.o cdna_alignment.o common_subs.o  cdna_alignment_assembler.o Lobject.o stringFuncts.o pasa.o argProcessor.o
@@ -35,12 +35,12 @@ OBJECTS = alignment_segment.o cdna_alignment.o common_subs.o  cdna_alignment_ass
 	$(CC) $(CFLAGS) -c $*.c -o $*.o 
 
 .cpp.o:
-	$(CPPC) $(CFLAGS) -c $*.cpp -o $*.o 
+	$(CXX) $(CFLAGS) -c $*.cpp -o $*.o 
 
 all:    $(ALL)
 
 pasa: ${OBJECTS} pasa.o
-	$(CPPC) -o $(BINDIR)/$@ $(OBJECTS) $(LDFLAGS)
+	$(CXX) -o $(BINDIR)/$@ $(OBJECTS) $(LDFLAGS)
 
 
 clean:
