@@ -14,7 +14,7 @@ main: {
 
     # validate alignments:
     
-    my $cmd = "../PASA.alignmentValidator --genome genome_sample.fasta blat.spliced_alignments.gff3 gmap.spliced_alignments.gff3";
+    my $cmd = "../PASA.alignmentValidator --genome genome_sample.fasta --transcripts transcripts.fasta blat.spliced_alignments.gff3 gmap.spliced_alignments.gff3";
     $pipeliner->add_commands(new Command($cmd, "pasa_lite.valid_alignments.gtf.ok") );
 
 

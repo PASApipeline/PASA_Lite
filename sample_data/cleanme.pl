@@ -16,6 +16,7 @@ my @files_to_keep = qw (cleanme.pl
 genome_sample.fasta
 gmap.spliced_alignments.gff3
 runMe.pl
+transcripts.fasta
 );
 
 
