@@ -376,6 +376,7 @@ sub cluster_transcripts {
         }
     }
     
+    $SingleLinkageClusterer::JACCARD_COEFF = 0;
     my @sl_clusters = &SingleLinkageClusterer::build_clusters(@pairs);
 
     foreach my $cluster (@sl_clusters) {
@@ -474,6 +475,7 @@ sub cluster_assemblies_via_exon_overlap {
     }
             
     ## Get sets of overlapping clusters
+    $SingleLinkageClusterer::JACCARD_COEFF = 0.3; # tease apart weakly connected clusters.
     my @clusters = &SingleLinkageClusterer::build_clusters(@pairs);
     
     
