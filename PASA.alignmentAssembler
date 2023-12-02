@@ -19,6 +19,7 @@ use CDNA::Genome_based_cDNA_assembler;
 use Overlap_info;
 use List::Util qw(min max);
 use Gene_obj_indexer;
+use Data::Dumper;
 
 use Thread_helper;
 
@@ -90,7 +91,7 @@ unless (@gxf_files) {
 }
 
 
-my $assembled_lock : shared;
+#my $assembled_lock : shared;
 
 
 
@@ -114,30 +115,40 @@ main: {
     
     ## Perform validations, assign spliced orientation
         
-    open (my $ofh_assembled_alignments, ">$out_prefix.pasa_assembled_alignments.gtf") or die $!;
-    my $stdout = select $ofh_assembled_alignments;
-    $|=1;
-
-    select $stdout;
     
+    my $scaff_tmp_results_dir = "__pasa_scaff_results";
+    if (! -d $scaff_tmp_results_dir) {
+        mkdir $scaff_tmp_results_dir or die "Error, cannot mkdir $scaff_tmp_results_dir";
+    }
+    
+    my @scaff_output_files;
     
     my $thread_helper = new Thread_helper($CPU);
 
     foreach my $scaff (keys %scaff_to_cdna_list) {
         
+        
+        
         my $cdna_ids_aref = $scaff_to_cdna_list{$scaff};
         
         $thread_helper->wait_for_open_thread();
-
-        my $thread = threads->create('run_pasa', $scaff, $cdna_ids_aref, $tmp_db, $ofh_assembled_alignments);
+        
+        print STDERR "-processing $scaff\n";
+        my $scaff_output_file = "$scaff_tmp_results_dir/$scaff.pasa.gtf";
+        push(@scaff_output_files, $scaff_output_file);
+        
+        if (-e "$scaff_output_file.ok") {
+            print STDERR "-already processed $scaff successfully. Skipping.\n";
+            next;
+        }
+        
+        my $thread = threads->create('run_pasa', $scaff, $cdna_ids_aref, $tmp_db, $scaff_output_file);
         $thread_helper->add_thread($thread);
     }
     
     $thread_helper->wait_for_all_threads_to_complete();
 
-    # close ofhs
-    close $ofh_assembled_alignments;
-
+    
     unlink($tmp_db);
     
     my @failures = $thread_helper->get_failed_threads();
@@ -151,7 +162,22 @@ main: {
         
     }
     else {
-        print STDERR "\nAssembly complete. :)  \n\n";
+    
+        print STDERR "-Assembly finished, gathering individual scaffold outputs..... ";
+        
+        open (my $ofh_assembled_alignments, ">$out_prefix.pasa_assembled_alignments.gtf") or die $!;
+        for my $file (@scaff_output_files) {
+            open(my $fh, $file) or die "Error, cannot open file $file";
+            while(<$fh>) {
+                print $ofh_assembled_alignments $_;
+            }
+            close $fh;
+        }
+        
+        # close ofh
+        close $ofh_assembled_alignments;
+        
+        print STDERR "\nAssembly complete. :)  See output: $out_prefix.pasa_assembled_alignments.gtf\n\n";
     }
     
         
@@ -163,13 +189,30 @@ main: {
 
 ####
 sub run_pasa {
-    my ($scaff, $cdna_ids_aref, $tmp_db, $ofh_assembled_alignments) = @_;
+    my ($scaff, $cdna_ids_aref, $tmp_db, $scaff_output_gtf_file) = @_;
 
-    print STDERR "-assembling alignments on $scaff\n";
+    #print STDERR "-assembling alignments on $scaff\n";
         
+    open(my $gtf_ofh, ">$scaff_output_gtf_file") or die "Error, cannot write to $scaff_output_gtf_file";
+    my $stdout = select $gtf_ofh;
+    $|++;
+    
+    open(my $gtf_asm_info_ofh, ">$scaff_output_gtf_file.log") or die "Error, cannot write to $scaff_output_gtf_file.log";
+    select $gtf_asm_info_ofh;
+    $|++;
+    
+    select $stdout;
+    
     my $cdna_alignments_indexer = new Gene_obj_indexer( { 'use' => $tmp_db } );
     
-    my @clustered_isoforms = &cluster_transcripts($cdna_ids_aref, $cdna_alignments_indexer);
+    my %acc_to_alignment_obj;
+    foreach my $cdna_id (@$cdna_ids_aref) {
+        my $alignment_obj = $cdna_alignments_indexer->get_gene($cdna_id);
+        $acc_to_alignment_obj{$cdna_id} = $alignment_obj;
+    }
+    
+
+    my @clustered_isoforms = &cluster_transcripts($cdna_ids_aref, \%acc_to_alignment_obj);
     
     my %seen;
     
@@ -180,7 +223,8 @@ sub run_pasa {
         
         my @cdna_alignments_to_assemble;
         foreach my $trans_id (@trans_ids) {
-            my $cdna_alignment_obj = $cdna_alignments_indexer->get_gene($trans_id);
+            #my $cdna_alignment_obj = $cdna_alignments_indexer->get_gene($trans_id);
+            my $cdna_alignment_obj = $acc_to_alignment_obj{$trans_id};
             
             push (@cdna_alignments_to_assemble, $cdna_alignment_obj);
                                     
@@ -204,12 +248,12 @@ sub run_pasa {
             $gene_counter++; # ensure each assembly set shares the same gene ID
             
             if (scalar @$assembly_set > 1) {
-                print STDERR "******  Got Alt splicing involving: " . scalar(@$assembly_set) . " transcripts\n";
+                print $gtf_asm_info_ofh "******  Got Alt splicing involving: " . scalar(@$assembly_set) . " transcripts\n";
                 
                 my $assembler = new CDNA::Genome_based_cDNA_assembler;
                 $assembler->{incoming_alignments} = [@$assembly_set];
                 $assembler->{assemblies} = [@$assembly_set];
-                print STDERR $assembler->toAlignIllustration();
+                print $gtf_asm_info_ofh $assembler->toAlignIllustration();
                 
                 
             }
@@ -223,14 +267,14 @@ sub run_pasa {
                 my $acc = $assembly->get_acc();
                 $assembly->{genome_acc} = $scaff;
                 
-                print "ASSEMBLY: " . $assembly->toToken() . "\t$acc\n";
+                print $gtf_asm_info_ofh "ASSEMBLY: " . $assembly->toToken() . "\t$acc\n";
                 
-                lock $assembled_lock;
+                #lock $assembled_lock;
                 
                 
                 my $trans_id = "$scaff.g$gene_counter.i$iso_counter";
                 
-                print $ofh_assembled_alignments "# $trans_id => $acc " . $assembly->toToken() . "\n"
+                print $gtf_ofh "# $trans_id => $acc " . $assembly->toToken() . "\n"
                     . $assembly->to_GTF_format(gene_id => "$scaff.g$gene_counter",
                                                transcript_id => $trans_id,
                     ) 
@@ -249,12 +293,12 @@ sub run_pasa {
             
               $gene_counter++;
               
-              my $cdna_alignment_obj = $cdna_alignments_indexer->get_gene($cdna_acc);
+              #my $cdna_alignment_obj = $cdna_alignments_indexer->get_gene($cdna_acc);
+              my $cdna_alignment_obj = $acc_to_alignment_obj{$cdna_acc};
               
+              #lock $assembled_lock;
               
-              lock $assembled_lock;
-              
-              print $ofh_assembled_alignments "# $cdna_acc " . $cdna_alignment_obj->toToken() . "\n"
+              print $gtf_ofh "# $cdna_acc " . $cdna_alignment_obj->toToken() . "\n"
                   . $cdna_alignment_obj->to_GTF_format(gene_id => "$scaff.g$gene_counter") . "\n";
           }
           
@@ -262,6 +306,11 @@ sub run_pasa {
       }
       
     }
+    
+    close $gtf_ofh;
+    close $gtf_asm_info_ofh;
+
+    system("touch $scaff_output_gtf_file.ok");
     
     return;
 }
@@ -294,13 +343,15 @@ sub add_cdna_alignments {
 
 ####
 sub cluster_transcripts {
-    my ($cdna_ids_aref, $cdna_alignment_indexer) = @_;
-
+    my ($cdna_ids_aref, $acc_to_alignment_obj_href) = @_;
+    
+    ## Overlap piler based on cdna alignment segments
     my $overlap_piler = new Overlap_piler();
     
     foreach my $cdna_acc (@$cdna_ids_aref) {
         
-        my $alignment_obj = $cdna_alignment_indexer->get_gene($cdna_acc);
+        #my $alignment_obj = $cdna_alignment_indexer->get_gene($cdna_acc);
+        my $alignment_obj = $acc_to_alignment_obj_href->{$cdna_acc};
         
         my @segments = $alignment_obj->get_alignment_segments();
         foreach my $segment (@segments) {
@@ -310,8 +361,10 @@ sub cluster_transcripts {
     }
 
     my @clustered_accs = $overlap_piler->build_clusters();
-
     
+    my @transcript_clusters;
+
+    ## build clusters of transcripts having overlapping alignment segments.
     my @pairs;
     
     foreach my $cluster (@clustered_accs) {
@@ -324,8 +377,41 @@ sub cluster_transcripts {
     }
     
     my @sl_clusters = &SingleLinkageClusterer::build_clusters(@pairs);
-    
-    return(@sl_clusters);
+
+    foreach my $cluster (@sl_clusters) {
+
+        #print STDERR "//\nCluster: " . join(", ", @$cluster) . "\n";
+        
+        my @cdna_accs = @$cluster;
+        if (scalar(@cdna_accs) == 1) {
+            push (@transcript_clusters, $cluster);
+        }
+        else {
+
+            my @alignment_objs;
+            # refine clusters based on exon overlap
+            foreach my $cdna_acc (@$cluster) {
+                #my $alignment_obj = $cdna_alignment_indexer->get_gene($cdna_acc); 
+                my $alignment_obj = $acc_to_alignment_obj_href->{$cdna_acc}; 
+                push (@alignment_objs, $alignment_obj);
+            }
+            
+            my @alignment_obj_clusters = &cluster_assemblies_via_exon_overlap(@alignment_objs);
+            my @local_cdna_clusters;
+            foreach my $alignment_obj_cluster (@alignment_obj_clusters) {
+                @cdna_accs = (); # reinit
+                foreach my $alignment_obj (@$alignment_obj_cluster) {
+                    my $acc = $alignment_obj->get_acc();
+                    push (@cdna_accs, $acc);
+                }
+                push (@local_cdna_clusters, [@cdna_accs]);
+            }
+                        
+            push(@transcript_clusters, @local_cdna_clusters);
+        }
+    }
+        
+    return(@transcript_clusters);
 }
 
 
