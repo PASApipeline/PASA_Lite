@@ -20,13 +20,16 @@ use Overlap_info;
 use List::Util qw(min max);
 use Gene_obj_indexer;
 use Data::Dumper;
-
 use Thread_helper;
 
 
 $ENV{PATH} = "$FindBin::Bin/bin:$ENV{PATH}";
 
 my $help_flag;
+
+my $JACCARD_COEFF_USE = 0.6;
+
+my $DEBUG = 0;
 
 
 my $usage = <<__EOUSAGE__;
@@ -47,9 +50,12 @@ my $usage = <<__EOUSAGE__;
 #                                          min_pct = ( shared_seq_len / shorter_isoform_len) * 100
 #                                          (default: 20)
 #
+#   --jaccard_coeff <float>              : jaccard coeff for breaking up loosely connected clusters (default: $JACCARD_COEFF_USE)
+#
 #  Note: As is the PASA tradition, spliced transcripts having non-consensus dinucleotide splice sites
 #        are  treated as invalid.   (accepted pairs restricted to: GT-AG, GC-AG, and AT-AC)
 #
+#   --debug                              : debug mode, highly verbose
 #
 ######################################################################################################
 
@@ -65,11 +71,12 @@ my $out_prefix = "pasa_lite";
 my $MIN_PCT_OVERLAP = 20;
 my $CPU = 2;
 
-&GetOptions ( 'h' => \$help_flag,
+&GetOptions ( 'h|help' => \$help_flag,
               'out_prefix=s' => \$out_prefix,
               'min_pct_iso_shared_sequence=i' => \$MIN_PCT_OVERLAP,
               'CPU=i' => \$CPU,
-              
+              'jaccard_coeff=f' => \$JACCARD_COEFF_USE,
+              'debug' => \$DEBUG,
     );
 
 
@@ -81,7 +88,6 @@ if (@unrecognized_args) {
 
 my @gxf_files = @ARGV;
 
-
 if ($help_flag) {
     die $usage;
 }
@@ -90,11 +96,12 @@ unless (@gxf_files) {
     die $usage;
 }
 
+if ($DEBUG) {
+    # propagate
+    $SingleLinkageClusterer::DEBUG = 1;
+}
 
 #my $assembled_lock : shared;
-
-
-
 
 main: {
 
@@ -236,8 +243,13 @@ sub run_pasa {
         
         $assembler->assemble_alignments(@cdna_alignments_to_assemble);
         
-        #print $assembler->toAlignIllustration(80);
-        #print "\n\n\n";
+        print $gtf_asm_info_ofh  $assembler->toAlignIllustration(80);
+        
+        
+        if ($DEBUG) {
+            print STDERR $assembler->toAlignIllustration(80);
+            print STDERR "\n\n\n";
+        }
         
         my @assemblies = $assembler->get_assemblies();
         
@@ -255,7 +267,9 @@ sub run_pasa {
                 $assembler->{assemblies} = [@$assembly_set];
                 print $gtf_asm_info_ofh $assembler->toAlignIllustration();
                 
-                
+                if ($DEBUG) {
+                    print STDERR $assembler->toAlignIllustration();
+                }
             }
             
             my $iso_counter = 0;
@@ -380,9 +394,7 @@ sub cluster_transcripts {
     my @sl_clusters = &SingleLinkageClusterer::build_clusters(@pairs);
 
     foreach my $cluster (@sl_clusters) {
-
-        #print STDERR "//\nCluster: " . join(", ", @$cluster) . "\n";
-        
+                
         my @cdna_accs = @$cluster;
         if (scalar(@cdna_accs) == 1) {
             push (@transcript_clusters, $cluster);
@@ -406,12 +418,15 @@ sub cluster_transcripts {
                     push (@cdna_accs, $acc);
                 }
                 push (@local_cdna_clusters, [@cdna_accs]);
+                if ($DEBUG) { print STDERR "//\nCluster: " . join(", ", @cdna_accs) . "\n"; }
             }
                         
             push(@transcript_clusters, @local_cdna_clusters);
+
+            
         }
     }
-        
+    
     return(@transcript_clusters);
 }
 
@@ -468,14 +483,20 @@ sub cluster_assemblies_via_exon_overlap {
             unless ($pct_overlap >= $MIN_PCT_OVERLAP) {
                 next;
             }
-                        
+
+            if ($DEBUG) {
+                my $assembler = new CDNA::Genome_based_cDNA_assembler;
+                $assembler->{incoming_alignments} = [$i_align, $j_align];
+                print STDERR $assembler->toAlignIllustration(); 
+                print STDERR "Pct overlap: $pct_overlap\n\n";
+            }
             ## passed test
             push (@pairs, [$i, $j]);
         }
     }
             
     ## Get sets of overlapping clusters
-    $SingleLinkageClusterer::JACCARD_COEFF = 0.3; # tease apart weakly connected clusters.
+    $SingleLinkageClusterer::JACCARD_COEFF = $JACCARD_COEFF_USE; # tease apart weakly connected clusters.
     my @clusters = &SingleLinkageClusterer::build_clusters(@pairs);
     
     

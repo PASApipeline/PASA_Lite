@@ -14,6 +14,7 @@ package SingleLinkageClusterer;
 use strict;
 
 our $JACCARD_COEFF;
+our $DEBUG;
 
 sub build_clusters {
     my @pairs = @_;
@@ -60,7 +61,10 @@ sub build_clusters {
     unless (-w $clusterfile) { die "Can't write $clusterfile";}
 
     my $cmd = "ulimit -s unlimited && $cluster_prog < $pairfile > $clusterfile";
-
+    if ($DEBUG) {
+        print STDERR "CMD: $cmd\n";
+    }
+    
     my $ret = system ($cmd);
     if ($ret) {
         die "ERROR: Couldn't run cluster properly via path: $cluster_prog.\ncmd: $cmd";
@@ -82,7 +86,9 @@ sub build_clusters {
     close CLUSTERS;
     
     ## clean up
-    unlink ($pairfile, $clusterfile);
+    unless($DEBUG) { 
+        unlink ($pairfile, $clusterfile);
+    }
     
     return (@clusters);
 }
