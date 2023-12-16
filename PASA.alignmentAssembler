@@ -26,7 +26,7 @@ use Thread_helper;
 $ENV{PATH} = "$FindBin::Bin/bin:$ENV{PATH}";
 
 my $help_flag;
-
+my $MIN_PCT_OVERLAP = 50;
 my $JACCARD_COEFF_USE = 0.6;
 
 my $DEBUG = 0;
@@ -48,7 +48,7 @@ my $usage = <<__EOUSAGE__;
 #   --min_pct_iso_shared_sequence <int>  : minimum percent of shared exon shared between two isoforms
 #                                          to be joined into the same gene cluster.
 #                                          min_pct = ( shared_seq_len / shorter_isoform_len) * 100
-#                                          (default: 20)
+#                                          (default: $MIN_PCT_OVERLAP)
 #
 #   --jaccard_coeff <float>              : jaccard coeff for breaking up loosely connected clusters (default: $JACCARD_COEFF_USE)
 #
@@ -68,7 +68,7 @@ __EOUSAGE__
 
 
 my $out_prefix = "pasa_lite";
-my $MIN_PCT_OVERLAP = 20;
+
 my $CPU = 2;
 
 &GetOptions ( 'h|help' => \$help_flag,
