@@ -2,7 +2,7 @@
 all: 
 	if [ ! -d bin ]; then mkdir bin; fi
 	cd pasa-plugins/pasa_cpp && $(MAKE) && cp pasa ../../bin/.
-	cd pasa-plugins/slclust && $(MAKE) && cp src/slclust ../../bin/.
+	cd pasa-plugins/slclust && $(MAKE) && cp slclust ../../bin/.
 
 clean:
 	cd pasa-plugins/pasa_cpp && $(MAKE) clean
