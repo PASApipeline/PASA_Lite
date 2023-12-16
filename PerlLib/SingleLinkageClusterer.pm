@@ -14,6 +14,7 @@ package SingleLinkageClusterer;
 use strict;
 
 our $JACCARD_COEFF;
+our $MIN_LINKS_EACH;
 our $DEBUG;
 
 sub build_clusters {
@@ -54,8 +55,11 @@ sub build_clusters {
     
     if ($JACCARD_COEFF) {
         $cluster_prog .= " -j $JACCARD_COEFF";
+        
+        if ($MIN_LINKS_EACH) {
+            $cluster_prog .= " --min_links_for_J $MIN_LINKS_EACH ";
+        }
     }
-    
     
     system "touch $clusterfile";
     unless (-w $clusterfile) { die "Can't write $clusterfile";}

@@ -27,7 +27,8 @@ $ENV{PATH} = "$FindBin::Bin/bin:$ENV{PATH}";
 
 my $help_flag;
 my $MIN_PCT_OVERLAP = 50;
-my $JACCARD_COEFF_USE = 0.6;
+my $JACCARD_COEFF_USE = 0.5;
+my $MIN_LINKS_EACH = 3;
 
 my $DEBUG = 0;
 
@@ -51,6 +52,7 @@ my $usage = <<__EOUSAGE__;
 #                                          (default: $MIN_PCT_OVERLAP)
 #
 #   --jaccard_coeff <float>              : jaccard coeff for breaking up loosely connected clusters (default: $JACCARD_COEFF_USE)
+#       --min_links_for_J <int>          : if --jaccard_coeff, require at least --min_links_for_J for each node before applying J coeff. (default: $MIN_LINKS_EACH)
 #
 #  Note: As is the PASA tradition, spliced transcripts having non-consensus dinucleotide splice sites
 #        are  treated as invalid.   (accepted pairs restricted to: GT-AG, GC-AG, and AT-AC)
@@ -76,6 +78,7 @@ my $CPU = 2;
               'min_pct_iso_shared_sequence=i' => \$MIN_PCT_OVERLAP,
               'CPU=i' => \$CPU,
               'jaccard_coeff=f' => \$JACCARD_COEFF_USE,
+              '--min_links_for_J=i' => \$MIN_LINKS_EACH,
               'debug' => \$DEBUG,
     );
 
@@ -100,6 +103,8 @@ if ($DEBUG) {
     # propagate
     $SingleLinkageClusterer::DEBUG = 1;
 }
+
+$SingleLinkageClusterer::MIN_LINKS_EACH = $MIN_LINKS_EACH;
 
 #my $assembled_lock : shared;
 
