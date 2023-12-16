@@ -1,0 +1,3 @@
+[submodule "pasa-plugins/slclust"]
+	path = pasa-plugins/slclust
+	url = https://github.com/brianjohnhaas/SLCLUST.git
