@@ -12,10 +12,12 @@ package SingleLinkageClusterer;
 ##              return ([1,2,3] , [6,7,8], ...)
 
 use strict;
+use Carp;
 
 our $JACCARD_COEFF;
 our $MIN_LINKS_EACH;
 our $DEBUG;
+our $USE_LEIDEN;
 
 sub build_clusters {
     my @pairs = @_;
@@ -48,30 +50,43 @@ sub build_clusters {
     
     my $clusterfile = "/tmp/$uniq_stamp.clusters";
     
-    my $cluster_prog = "slclust"; 
-    if ($CLUSTERPATH) {
-        $cluster_prog = $CLUSTERPATH;
-    }
-    
-    if ($JACCARD_COEFF) {
-        $cluster_prog .= " -j $JACCARD_COEFF";
-        
-        if ($MIN_LINKS_EACH) {
-            $cluster_prog .= " --min_links_for_J $MIN_LINKS_EACH ";
-        }
-    }
-    
-    system "touch $clusterfile";
-    unless (-w $clusterfile) { die "Can't write $clusterfile";}
+    my $cmd;
 
-    my $cmd = "ulimit -s unlimited && $cluster_prog < $pairfile > $clusterfile";
+    if ($USE_LEIDEN) {
+        
+        $cmd = "Leiden_cluster_pairs.py --pairs $pairfile > $clusterfile ";
+        
+    }
+    else {
+
+        
+        my $cluster_prog = "slclust"; 
+        if ($CLUSTERPATH) {
+            $cluster_prog = $CLUSTERPATH;
+        }
+        
+        if ($JACCARD_COEFF) {
+            $cluster_prog .= " -j $JACCARD_COEFF";
+            
+            if ($MIN_LINKS_EACH) {
+                $cluster_prog .= " --min_links_for_J $MIN_LINKS_EACH ";
+            }
+        }
+        
+        system "touch $clusterfile";
+        unless (-w $clusterfile) { die "Can't write $clusterfile";}
+        
+        $cmd = "ulimit -s unlimited && $cluster_prog < $pairfile > $clusterfile";
+
+    }
+    
     if ($DEBUG) {
         print STDERR "CMD: $cmd\n";
-    }
+    }    
     
     my $ret = system ($cmd);
     if ($ret) {
-        die "ERROR: Couldn't run cluster properly via path: $cluster_prog.\ncmd: $cmd";
+        confess "ERROR: Couldn't run cluster properly via $cmd\n";
     }
     
     my @clusters;

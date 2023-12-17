@@ -23,12 +23,14 @@ use Data::Dumper;
 use Thread_helper;
 
 
-$ENV{PATH} = "$FindBin::Bin/bin:$ENV{PATH}";
+$ENV{PATH} = "$FindBin::Bin/bin:$FindBin::Bin/util:$ENV{PATH}";
 
 my $help_flag;
-my $MIN_PCT_OVERLAP = 50;
+my $MIN_PCT_SMALL_OVERLAP = 50;
+my $MIN_PCT_LARGE_OVERLAP = 20;
 my $JACCARD_COEFF_USE = 0.5;
 my $MIN_LINKS_EACH = 3;
+
 
 my $DEBUG = 0;
 
@@ -46,11 +48,17 @@ my $usage = <<__EOUSAGE__;
 #
 #   --out_prefix <string>                : prefix for output file names (default: 'pasa_lite')
 #
-#   --min_pct_iso_shared_sequence <int>  : minimum percent of shared exon shared between two isoforms
+#   --min_pct_small_shared <int>  : minimum percent of shared exon shared between two isoforms
 #                                          to be joined into the same gene cluster.
 #                                          min_pct = ( shared_seq_len / shorter_isoform_len) * 100
-#                                          (default: $MIN_PCT_OVERLAP)
+#                                          (default: $MIN_PCT_SMALL_OVERLAP)
 #
+#   --min_pct_large_shared <int>  : same as above for longer isoform length. (default: $MIN_PCT_LARGE_OVERLAP)
+#
+#
+#  Clustering options:
+#   --use_Leiden                         : performs Leiden clustering
+#      or
 #   --jaccard_coeff <float>              : jaccard coeff for breaking up loosely connected clusters (default: $JACCARD_COEFF_USE)
 #       --min_links_for_J <int>          : if --jaccard_coeff, require at least --min_links_for_J for each node before applying J coeff. (default: $MIN_LINKS_EACH)
 #
@@ -70,15 +78,18 @@ __EOUSAGE__
 
 
 my $out_prefix = "pasa_lite";
+my $USE_LEIDEN;
 
 my $CPU = 2;
 
 &GetOptions ( 'h|help' => \$help_flag,
               'out_prefix=s' => \$out_prefix,
-              'min_pct_iso_shared_sequence=i' => \$MIN_PCT_OVERLAP,
+              'min_pct_small_shared=i' => \$MIN_PCT_SMALL_OVERLAP,
+              'min_pct_large_shared=i' => \$MIN_PCT_LARGE_OVERLAP,
               'CPU=i' => \$CPU,
               'jaccard_coeff=f' => \$JACCARD_COEFF_USE,
               '--min_links_for_J=i' => \$MIN_LINKS_EACH,
+              'use_Leiden' => \$USE_LEIDEN,
               'debug' => \$DEBUG,
     );
 
@@ -106,6 +117,7 @@ if ($DEBUG) {
 
 $SingleLinkageClusterer::MIN_LINKS_EACH = $MIN_LINKS_EACH;
 
+
 #my $assembled_lock : shared;
 
 main: {
@@ -128,7 +140,7 @@ main: {
     ## Perform validations, assign spliced orientation
         
     
-    my $scaff_tmp_results_dir = "__pasa_scaff_results";
+    my $scaff_tmp_results_dir = "__${out_prefix}__pasa_scaff_results";
     if (! -d $scaff_tmp_results_dir) {
         mkdir $scaff_tmp_results_dir or die "Error, cannot mkdir $scaff_tmp_results_dir";
     }
@@ -138,8 +150,6 @@ main: {
     my $thread_helper = new Thread_helper($CPU);
 
     foreach my $scaff (keys %scaff_to_cdna_list) {
-        
-        
         
         my $cdna_ids_aref = $scaff_to_cdna_list{$scaff};
         
@@ -291,10 +301,10 @@ sub run_pasa {
                 #lock $assembled_lock;
                 
                 
-                my $trans_id = "$scaff.g$gene_counter.i$iso_counter";
+                my $trans_id = "$out_prefix.$scaff.g$gene_counter.i$iso_counter";
                 
                 print $gtf_ofh "# $trans_id => $acc " . $assembly->toToken() . "\n"
-                    . $assembly->to_GTF_format(gene_id => "$scaff.g$gene_counter",
+                    . $assembly->to_GTF_format(gene_id => "$out_prefix.$scaff.g$gene_counter",
                                                transcript_id => $trans_id,
                     ) 
                     . "\n";
@@ -318,7 +328,7 @@ sub run_pasa {
               #lock $assembled_lock;
               
               print $gtf_ofh "# $cdna_acc " . $cdna_alignment_obj->toToken() . "\n"
-                  . $cdna_alignment_obj->to_GTF_format(gene_id => "$scaff.g$gene_counter") . "\n";
+                  . $cdna_alignment_obj->to_GTF_format(gene_id => "$out_prefix.$scaff.g$gene_counter") . "\n";
           }
           
           
@@ -395,9 +405,12 @@ sub cluster_transcripts {
         }
     }
     
+    # reinit
     $SingleLinkageClusterer::JACCARD_COEFF = 0;
-    my @sl_clusters = &SingleLinkageClusterer::build_clusters(@pairs);
+    $SingleLinkageClusterer::USE_LEIDEN = 0;
 
+    my @sl_clusters = &SingleLinkageClusterer::build_clusters(@pairs);
+    
     foreach my $cluster (@sl_clusters) {
                 
         my @cdna_accs = @$cluster;
@@ -482,18 +495,26 @@ sub cluster_assemblies_via_exon_overlap {
                                                                 [ &get_exon_coord_tupples($j_align) ] );
             
             my $shorter_iso_len = min($i_length, $j_length);
-
-            my $pct_overlap = $sum_exon_overlap / $shorter_iso_len * 100;
-
-            unless ($pct_overlap >= $MIN_PCT_OVERLAP) {
+            my $longer_iso_len = max($i_length, $j_length);
+            
+            my $pct_overlap_short = $sum_exon_overlap / $shorter_iso_len * 100;
+            my $pct_overlap_long = $sum_exon_overlap / $longer_iso_len * 100;
+            
+            unless ($pct_overlap_short >= $MIN_PCT_SMALL_OVERLAP
+                    &&
+                    $pct_overlap_long >= $MIN_PCT_LARGE_OVERLAP
+                    
+                ) {
                 next;
             }
-
+            
             if ($DEBUG) {
                 my $assembler = new CDNA::Genome_based_cDNA_assembler;
                 $assembler->{incoming_alignments} = [$i_align, $j_align];
                 print STDERR $assembler->toAlignIllustration(); 
-                print STDERR "Pct overlap: $pct_overlap\n\n";
+                $pct_overlap_short = sprintf("%.1f", $pct_overlap_short);
+                $pct_overlap_long = sprintf("%.1f", $pct_overlap_long);
+                print STDERR "Pct overlaps: (short: $pct_overlap_short, long: $pct_overlap_long)\n\n";
             }
             ## passed test
             push (@pairs, [$i, $j]);
@@ -502,6 +523,10 @@ sub cluster_assemblies_via_exon_overlap {
             
     ## Get sets of overlapping clusters
     $SingleLinkageClusterer::JACCARD_COEFF = $JACCARD_COEFF_USE; # tease apart weakly connected clusters.
+    $SingleLinkageClusterer::USE_LEIDEN = 0; # reinit
+    if ($USE_LEIDEN) {
+        $SingleLinkageClusterer::USE_LEIDEN = 1;
+    }
     my @clusters = &SingleLinkageClusterer::build_clusters(@pairs);
     
     
