@@ -35,7 +35,7 @@ my $usage = <<__EOUSAGE__;
 
 #####################################################################
 
- usage: $0  --genome genome.fasta [opts] Trinity_gmap.gff3 [Cufflinks.gtf ...]
+ usage: $0  --genome genome.fasta [opts] Isoquant_sampleA.gtf [Isoquant_sampleB.gtf ...] 
 
 
 ######################################################################################################
@@ -103,13 +103,16 @@ if (@unrecognized_args) {
     die "Error, don't recognize arguments: [@unrecognized_args] as prog options or gtf, gff3 files... ";
 }
 
-my @gxf_files = @ARGV;
-
-print "GXF files: @gxf_files\n";
 
 if ($help_flag) {
     die $usage;
 }
+
+
+my @gxf_files = @ARGV;
+
+print "GXF files: @gxf_files\n";
+
 
 unless ($genome_fasta && @gxf_files && $transcripts_files) {
     die $usage;
