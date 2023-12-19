@@ -33,12 +33,16 @@ my $CPU = 2;
 
 my $usage = <<__EOUSAGE__;
 
-#####################################################################
-
- usage: $0  --genome genome.fasta [opts] Isoquant_sampleA.gtf [Isoquant_sampleB.gtf ...] 
-
-
-######################################################################################################
+############################################################################################################
+#
+#  usage: $0  --genome genome.fasta \
+#            --transcripts transcripts.fasta \
+#                [opts] \
+#                Isoquant_sampleA.gtf [Isoquant_sampleB.gtf ...] 
+#
+#
+#
+####
 #
 #  Required:
 #
@@ -108,16 +112,13 @@ if ($help_flag) {
     die $usage;
 }
 
-
 my @gxf_files = @ARGV;
-
-print "GXF files: @gxf_files\n";
-
 
 unless ($genome_fasta && @gxf_files && $transcripts_files) {
     die $usage;
 }
 
+print "GXF files: @gxf_files\n";
 
 my $invalid_lock : shared;
 my $valid_lock : shared;
