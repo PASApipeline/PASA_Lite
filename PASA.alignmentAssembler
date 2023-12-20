@@ -28,8 +28,8 @@ $ENV{PATH} = "$FindBin::Bin/bin:$FindBin::Bin/util:$ENV{PATH}";
 my $help_flag;
 my $MIN_PCT_SMALL_OVERLAP = 50;
 my $MIN_PCT_LARGE_OVERLAP = 20;
-my $JACCARD_COEFF_USE = 0.5;
-my $MIN_LINKS_EACH = 3;
+#my $JACCARD_COEFF_USE = 0.6;
+#my $MIN_LINKS_EACH = 0;
 
 
 my $DEBUG = 0;
@@ -56,15 +56,6 @@ my $usage = <<__EOUSAGE__;
 #   --min_pct_large_shared <int>  : same as above for longer isoform length. (default: $MIN_PCT_LARGE_OVERLAP)
 #
 #
-#  Clustering options:
-#   --use_Leiden                         : performs Leiden clustering
-#      or
-#   --jaccard_coeff <float>              : jaccard coeff for breaking up loosely connected clusters (default: $JACCARD_COEFF_USE)
-#       --min_links_for_J <int>          : if --jaccard_coeff, require at least --min_links_for_J for each node before applying J coeff. (default: $MIN_LINKS_EACH)
-#
-#  Note: As is the PASA tradition, spliced transcripts having non-consensus dinucleotide splice sites
-#        are  treated as invalid.   (accepted pairs restricted to: GT-AG, GC-AG, and AT-AC)
-#
 #   --debug                              : debug mode, highly verbose
 #
 ######################################################################################################
@@ -76,9 +67,18 @@ __EOUSAGE__
     ;
 
 
+#  Clustering options:
+#   --use_Leiden                         : performs Leiden clustering
+#      or
+#   --jaccard_coeff <float>              : jaccard coeff for breaking up loosely connected clusters (default: $JACCARD_COEFF_USE)
+#       --min_links_for_J <int>          : if --jaccard_coeff, require at least --min_links_for_J for each node before applying J coeff. (default: $MIN_LINKS_EACH)
+#
+
+
+
 
 my $out_prefix = "pasa_lite";
-my $USE_LEIDEN;
+my $USE_LEIDEN = 1;
 
 my $CPU = 2;
 
@@ -87,9 +87,9 @@ my $CPU = 2;
               'min_pct_small_shared=i' => \$MIN_PCT_SMALL_OVERLAP,
               'min_pct_large_shared=i' => \$MIN_PCT_LARGE_OVERLAP,
               'CPU=i' => \$CPU,
-              'jaccard_coeff=f' => \$JACCARD_COEFF_USE,
-              '--min_links_for_J=i' => \$MIN_LINKS_EACH,
-              'use_Leiden' => \$USE_LEIDEN,
+              #'jaccard_coeff=f' => \$JACCARD_COEFF_USE,
+              #'--min_links_for_J=i' => \$MIN_LINKS_EACH,
+              #'use_Leiden' => \$USE_LEIDEN,
               'debug' => \$DEBUG,
     );
 
@@ -115,7 +115,7 @@ if ($DEBUG) {
     $SingleLinkageClusterer::DEBUG = 1;
 }
 
-$SingleLinkageClusterer::MIN_LINKS_EACH = $MIN_LINKS_EACH;
+#$SingleLinkageClusterer::MIN_LINKS_EACH = $MIN_LINKS_EACH;
 
 
 #my $assembled_lock : shared;
@@ -339,7 +339,7 @@ sub run_pasa {
     close $gtf_ofh;
     close $gtf_asm_info_ofh;
 
-    system("touch $scaff_output_gtf_file.ok");
+    system("touch \"$scaff_output_gtf_file.ok\"");
     
     return;
 }
@@ -406,9 +406,9 @@ sub cluster_transcripts {
     }
     
     # reinit
-    $SingleLinkageClusterer::JACCARD_COEFF = 0;
+    #$SingleLinkageClusterer::JACCARD_COEFF = 0;
     $SingleLinkageClusterer::USE_LEIDEN = 0;
-
+    
     my @sl_clusters = &SingleLinkageClusterer::build_clusters(@pairs);
     
     foreach my $cluster (@sl_clusters) {
@@ -522,7 +522,7 @@ sub cluster_assemblies_via_exon_overlap {
     }
             
     ## Get sets of overlapping clusters
-    $SingleLinkageClusterer::JACCARD_COEFF = $JACCARD_COEFF_USE; # tease apart weakly connected clusters.
+    #$SingleLinkageClusterer::JACCARD_COEFF = $JACCARD_COEFF_USE; # tease apart weakly connected clusters.
     $SingleLinkageClusterer::USE_LEIDEN = 0; # reinit
     if ($USE_LEIDEN) {
         $SingleLinkageClusterer::USE_LEIDEN = 1;

@@ -42,7 +42,7 @@ my $usage = <<__EOUSAGE__;
 #
 #
 #
-####
+####  Options ####
 #
 #  Required:
 #
@@ -53,7 +53,7 @@ my $usage = <<__EOUSAGE__;
 #  Optional:
 #
 #   --CPU <int>                          : max number of concurrent threads (default: $CPU)
-## 
+# 
 #   --transcribed_is_aligned_orient      : flag, indicating strand-specific and transcripts 
 #                                        already oriented accordingly.  (default, not 
 #                                        trusting aligned orientation, define transcribed 
